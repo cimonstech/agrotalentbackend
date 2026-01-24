@@ -24,7 +24,7 @@ FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
 # Resend
-RESEND_API_KEY=re_E8mxeajE_HvzMLhtM5hbK3ZckXLL5ArpZ
+RESEND_API_KEY=your_resend_api_key_here
 
 # Cloudflare R2 (for file storage)
 R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
@@ -44,11 +44,9 @@ R2_PUBLIC_URL=https://your-custom-domain.com  # Optional
    - R2 → Manage R2 API Tokens → Create API Token
    - Permissions: Object Read & Write
    - Copy Access Key ID and Secret Access Key
-   token value: 1sneucbS3iDh-uU_Fp5hGgFUySsyITDyPWVQL336
-   Access Key ID
-71b8192f9d786e82284ba06fcc2e549b
-
-Secret Access Key
+   - Token value: <your_token_value>
+   - Access Key ID: <your_access_key_id>
+   - Secret Access Key: <your_secret_access_key>
 
 
 

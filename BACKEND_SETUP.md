@@ -26,7 +26,7 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 PORT=3001
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
-RESEND_API_KEY=re_E8mxeajE_HvzMLhtM5hbK3ZckXLL5ArpZ
+RESEND_API_KEY=your_resend_api_key_here
 ```
 
 4. **Start the server:**

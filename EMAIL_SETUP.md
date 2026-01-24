@@ -38,7 +38,7 @@
 Make sure these are set in `backend/.env`:
 
 ```env
-RESEND_API_KEY=re_E8mxeajE_HvzMLhtM5hbK3ZckXLL5ArpZ
+RESEND_API_KEY=your_resend_api_key_here
 FROM_EMAIL=AgroTalent Hub <notifications@agrotalentshub.com>
 NEXT_PUBLIC_SITE_URL=http://localhost:3000  # or your production URL
 ```

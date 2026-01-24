@@ -12,7 +12,7 @@
 - **Email Domain**: `agrotalentshub.com`
 
 ### Resend
-- **API Key**: `re_E8mxeajE_HvzMLhtM5hbK3ZckXLL5ArpZ`
+- **API Key**: `your_resend_api_key_here`
 - **Sender Email**: `notifications@agrotalentshub.com` (needs domain verification)
 
 ## What's Been Updated

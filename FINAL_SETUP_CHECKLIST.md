@@ -30,7 +30,7 @@ NEXT_PUBLIC_SUPABASE_URL=https://aftdnvdkeplbbroeufdt.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_az9ShzA0Bk_GEv_KB-Kjlg_8WWjQ3ul
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
-RESEND_API_KEY=re_E8mxeajE_HvzMLhtM5hbK3ZckXLL5ArpZ
+RESEND_API_KEY=your_resend_api_key_here
 ```
 
 **Important:** Get `SUPABASE_SERVICE_ROLE_KEY` from:
