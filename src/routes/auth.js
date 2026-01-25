@@ -39,9 +39,9 @@ router.post('/signup', async (req, res) => {
     }
 
     // Validate role
-    if (!['farm', 'graduate', 'student'].includes(role)) {
+    if (!['farm', 'graduate', 'student', 'skilled'].includes(role)) {
       return res.status(400).json({
-        error: 'Invalid role. Must be farm, graduate, or student'
+        error: 'Invalid role. Must be farm, graduate, student, or skilled'
       });
     }
 
@@ -108,9 +108,52 @@ router.post('/signup', async (req, res) => {
       profileData.graduation_year = roleSpecificData.graduation_year || null;
       profileData.preferred_region = roleSpecificData.preferred_region || null;
       
+      // Optional experience fields (can be added by graduates/students)
+      if (roleSpecificData.years_of_experience) {
+        profileData.years_of_experience = roleSpecificData.years_of_experience;
+      }
+      if (roleSpecificData.experience_description) {
+        profileData.experience_description = roleSpecificData.experience_description;
+      }
+      if (roleSpecificData.crops_experience) {
+        profileData.crops_experience = roleSpecificData.crops_experience;
+      }
+      if (roleSpecificData.livestock_experience) {
+        profileData.livestock_experience = roleSpecificData.livestock_experience;
+      }
+      if (roleSpecificData.skills) {
+        profileData.skills = roleSpecificData.skills;
+      }
+      if (roleSpecificData.previous_employer) {
+        profileData.previous_employer = roleSpecificData.previous_employer;
+      }
+      if (roleSpecificData.reference_name) {
+        profileData.reference_name = roleSpecificData.reference_name;
+      }
+      if (roleSpecificData.reference_phone) {
+        profileData.reference_phone = roleSpecificData.reference_phone;
+      }
+      if (roleSpecificData.reference_relationship) {
+        profileData.reference_relationship = roleSpecificData.reference_relationship;
+      }
+      
       if (role === 'student') {
         profileData.nss_status = roleSpecificData.nss_status || 'not_applicable';
       }
+    }
+
+    // Add skilled worker-specific fields
+    if (role === 'skilled') {
+      profileData.years_of_experience = roleSpecificData.years_of_experience || null;
+      profileData.experience_description = roleSpecificData.experience_description || null;
+      profileData.crops_experience = roleSpecificData.crops_experience || null;
+      profileData.livestock_experience = roleSpecificData.livestock_experience || null;
+      profileData.skills = roleSpecificData.skills || null;
+      profileData.previous_employer = roleSpecificData.previous_employer || null;
+      profileData.reference_name = roleSpecificData.reference_name || null;
+      profileData.reference_phone = roleSpecificData.reference_phone || null;
+      profileData.reference_relationship = roleSpecificData.reference_relationship || null;
+      profileData.preferred_region = roleSpecificData.preferred_region || null;
     }
 
     // Wait a moment for the trigger to complete
