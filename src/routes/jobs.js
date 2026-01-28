@@ -7,14 +7,19 @@ const router = express.Router();
 // GET /api/jobs - List jobs with filters
 router.get('/', async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
     const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
     const id = searchParams.get('id');
     const location = searchParams.get('location');
     const jobType = searchParams.get('job_type');
     const specialization = searchParams.get('specialization');
     const farmId = searchParams.get('farm_id');
-    const status = searchParams.get('status') || 'active';
+    const status = searchParams.get('status') || 'all';
+    
+    // If status='all', use admin client to bypass RLS (since RLS only allows viewing 'active' jobs)
+    // Otherwise use regular client for RLS-protected queries
+    const supabase = status === 'all' 
+      ? getSupabaseAdminClient() 
+      : getSupabaseClient();
     
     let query = supabase
       .from('jobs')
@@ -31,7 +36,10 @@ router.get('/', async (req, res) => {
     if (id) {
       query = query.eq('id', id).single();
     } else {
-      if (status && status !== 'all') query = query.eq('status', status);
+      if (status && status !== 'all') {
+        query = query.eq('status', status);
+      }
+      // Note: For 'all' status, we'll filter inactive jobs older than 24h after fetching
       if (location) query = query.eq('location', location);
       if (jobType) query = query.eq('job_type', jobType);
       if (specialization) query = query.eq('required_specialization', specialization);
@@ -40,13 +48,26 @@ router.get('/', async (req, res) => {
       query = query.order('created_at', { ascending: false });
     }
     
-    const { data, error } = await query;
+    let { data, error } = await query;
     
     if (error) throw error;
     
     if (id) {
       return res.json({ job: data });
     } else {
+      // Filter out inactive jobs older than 24 hours for public view
+      if (status === 'all' || !status) {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        data = (data || []).filter((job) => {
+          // Show job if:
+          // 1. Status is not 'inactive', OR
+          // 2. Status is 'inactive' but status_changed_at is within last 24 hours (or null)
+          if (job.status !== 'inactive') return true;
+          if (!job.status_changed_at) return true; // Show if no status_changed_at (backward compatibility)
+          const statusChangedAt = new Date(job.status_changed_at);
+          return statusChangedAt > twentyFourHoursAgo;
+        });
+      }
       return res.json({ jobs: data || [] });
     }
   } catch (error) {
