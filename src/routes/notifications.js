@@ -7,15 +7,15 @@ const router = express.Router();
 // GET /api/notifications - Get user's notifications
 router.get('/', authenticate, async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = req.supabase || getSupabaseClient();
     const unreadOnly = req.query.unread === 'true';
     
     let query = supabase
       .from('notifications')
-      .select('*')
+      .select('id, type, title, message, link, read, created_at')
       .eq('user_id', req.user.id)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(20);
     
     if (unreadOnly) {
       query = query.eq('read', false);
@@ -34,7 +34,7 @@ router.get('/', authenticate, async (req, res) => {
 // PATCH /api/notifications - Mark notifications as read
 router.patch('/', authenticate, async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = req.supabase || getSupabaseClient();
     const { notification_ids, mark_all_read } = req.body;
     
     if (mark_all_read) {

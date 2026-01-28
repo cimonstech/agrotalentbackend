@@ -776,6 +776,114 @@ router.get('/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/documents - List documents for verification
+router.get('/documents', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const documentType = req.query.document_type;
+    const status = req.query.status;
+    const search = req.query.search;
+    const page = parseInt(req.query.page || '1');
+    const limit = parseInt(req.query.limit || '50');
+    const offset = (page - 1) * limit;
+
+    let query = supabaseAdmin
+      .from('documents')
+      .select(`
+        *,
+        profiles:user_id (
+          id,
+          full_name,
+          email,
+          role
+        )
+      `, { count: 'exact' })
+      .order('uploaded_at', { ascending: false });
+
+    if (documentType) {
+      query = query.eq('document_type', documentType);
+    }
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    if (search) {
+      query = query.or(
+        `file_name.ilike.%${search}%,profiles.full_name.ilike.%${search}%,profiles.email.ilike.%${search}%`
+      );
+    }
+
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: documents, error, count } = await query;
+
+    if (error) throw error;
+
+    return res.json({
+      documents: documents || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Admin documents fetch error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to fetch documents' });
+  }
+});
+
+// POST /api/admin/documents/:id/approve - Approve document
+router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { data: document, error } = await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'approved',
+        reviewed_by: req.user.id,
+        reviewed_at: new Date().toISOString(),
+        rejection_reason: null
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return res.json({ document });
+  } catch (error) {
+    console.error('Admin document approve error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to approve document' });
+  }
+});
+
+// POST /api/admin/documents/:id/reject - Reject document
+router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { reason } = req.body || {};
+    const { data: document, error } = await supabaseAdmin
+      .from('documents')
+      .update({
+        status: 'rejected',
+        reviewed_by: req.user.id,
+        reviewed_at: new Date().toISOString(),
+        rejection_reason: reason || null
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return res.json({ document });
+  } catch (error) {
+    console.error('Admin document reject error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to reject document' });
+  }
+});
+
 // POST /api/admin/users/create - Create user
 router.post('/users/create', requireAdmin, async (req, res) => {
   try {
@@ -975,6 +1083,152 @@ router.post('/verify/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/jobs - List all jobs from all employers
+router.get('/jobs', requireAdmin, async (req, res) => {
+  try {
+    // Use admin client to bypass RLS and see all jobs
+    const supabaseAdmin = getSupabaseAdminClient();
+    const status = req.query.status;
+    const farmId = req.query.farm_id;
+    const location = req.query.location;
+    const jobType = req.query.job_type;
+    const page = parseInt(req.query.page || '1');
+    const limit = parseInt(req.query.limit || '100');
+    const offset = (page - 1) * limit;
+    
+    let query = supabaseAdmin
+      .from('jobs')
+      .select(`
+        *,
+        profiles:farm_id (
+          id,
+          farm_name,
+          farm_type,
+          farm_location,
+          email
+        )
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false });
+    
+    // Don't filter by status by default - show all jobs
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
+    
+    if (farmId) {
+      query = query.eq('farm_id', farmId);
+    }
+    
+    if (location) {
+      query = query.eq('location', location);
+    }
+    
+    if (jobType) {
+      query = query.eq('job_type', jobType);
+    }
+    
+    query = query.range(offset, offset + limit - 1);
+    
+    const { data: jobs, error, count } = await query;
+    
+    if (error) {
+      console.error('Error fetching admin jobs:', error);
+      throw error;
+    }
+    
+    return res.json({
+      jobs: jobs || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Admin jobs fetch error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to fetch jobs' });
+  }
+});
+
+// GET /api/admin/applications - List all applications
+router.get('/applications', requireAdmin, async (req, res) => {
+  try {
+    // Use admin client to bypass RLS
+    const supabase = getSupabaseAdminClient();
+    const status = req.query.status;
+    const jobId = req.query.job_id;
+    const applicantId = req.query.applicant_id;
+    const page = parseInt(req.query.page || '1');
+    const limit = parseInt(req.query.limit || '50');
+    const offset = (page - 1) * limit;
+    
+    let query = supabase
+      .from('applications')
+      .select(`
+        *,
+        jobs:job_id (
+          id,
+          title,
+          description,
+          location,
+          job_type,
+          salary_min,
+          salary_max,
+          status,
+          profiles:farm_id (
+            farm_name,
+            farm_type,
+            farm_location
+          )
+        ),
+        applicant:applicant_id (
+          id,
+          full_name,
+          email,
+          phone,
+          qualification,
+          institution_name,
+          specialization,
+          preferred_region,
+          is_verified,
+          role
+        )
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false });
+    
+    if (status) {
+      query = query.eq('status', status);
+    }
+    
+    if (jobId) {
+      query = query.eq('job_id', jobId);
+    }
+    
+    if (applicantId) {
+      query = query.eq('applicant_id', applicantId);
+    }
+    
+    query = query.range(offset, offset + limit - 1);
+    
+    const { data: applications, error, count } = await query;
+    
+    if (error) throw error;
+    
+    return res.json({
+      applications: applications || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit)
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/admin/placements - List all placements
 router.get('/placements', requireAdmin, async (req, res) => {
   try {
@@ -1064,48 +1318,28 @@ router.get('/reports', requireAdmin, async (req, res) => {
     let report = {};
     
     if (reportType === 'overview' || reportType === 'all') {
-      const { count: totalUsers } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true });
-      
-      const { count: farms } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'farm');
-      
-      const { count: graduates } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'graduate');
-      
-      const { count: students } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'student');
-      
-      const { count: verified } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_verified', true);
-      
-      const { count: activeJobs } = await supabase
-        .from('jobs')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'active');
-      
-      const { count: totalApplications } = await supabase
-        .from('applications')
-        .select('*', { count: 'exact', head: true });
-      
-      const { count: activePlacements } = await supabase
-        .from('placements')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['active', 'training']);
-      
-      const { count: completedPlacements } = await supabase
-        .from('placements')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'completed');
+      // Parallelize all count queries for better performance
+      const [
+        { count: totalUsers },
+        { count: farms },
+        { count: graduates },
+        { count: students },
+        { count: verified },
+        { count: activeJobs },
+        { count: totalApplications },
+        { count: activePlacements },
+        { count: completedPlacements }
+      ] = await Promise.all([
+        supabase.from('profiles').select('*', { count: 'exact', head: true }),
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'farm'),
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'graduate'),
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'student'),
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_verified', true),
+        supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+        supabase.from('applications').select('*', { count: 'exact', head: true }),
+        supabase.from('placements').select('*', { count: 'exact', head: true }).in('status', ['active', 'training']),
+        supabase.from('placements').select('*', { count: 'exact', head: true }).eq('status', 'completed')
+      ]);
       
       report.overview = {
         total_users: totalUsers || 0,

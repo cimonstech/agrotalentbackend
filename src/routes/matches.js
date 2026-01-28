@@ -95,7 +95,9 @@ router.get('/', authenticate, async (req, res) => {
     const matches = await matching.findJobsForGraduate(req.user.id);
 
     // Enrich with job details (the service returns ids + score)
-    const jobIds = matches.map(m => m.job_id);
+    // Limit to top 20 matches for performance
+    const topMatches = matches.slice(0, 20);
+    const jobIds = topMatches.map(m => m.job_id);
     if (jobIds.length === 0) return res.json({ matches: [] });
 
     const { data: jobs, error: jobsError } = await supabase
@@ -109,7 +111,8 @@ router.get('/', authenticate, async (req, res) => {
           farm_location
         )
       `)
-      .in('id', jobIds);
+      .in('id', jobIds)
+      .limit(20);
 
     if (jobsError) throw jobsError;
 

@@ -54,6 +54,7 @@ import dataCollectionRoutes from './routes/data-collection.js';
 import statsRoutes from './routes/stats.js';
 import adminRoutes from './routes/admin.js';
 import contactRoutes from './routes/contact.js';
+import placementsRoutes from './routes/placements.js';
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -69,6 +70,7 @@ app.use('/api/data-collection', dataCollectionRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/placements', placementsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
