@@ -358,6 +358,54 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/applications/:id/documents - Get applicant documents (farm only, for viewing an application)
+router.get('/:id/documents', authenticate, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const applicationId = req.params.id;
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', req.user.id)
+      .single();
+
+    if (profileError || !profile || profile.role !== 'farm') {
+      return res.status(403).json({ error: 'Only employers can view applicant documents' });
+    }
+
+    const { data: application, error: appError } = await supabaseAdmin
+      .from('applications')
+      .select('id, applicant_id, job_id, jobs:job_id (farm_id)')
+      .eq('id', applicationId)
+      .single();
+
+    if (appError || !application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const farmId = application.jobs?.farm_id;
+    if (!farmId || farmId !== req.user.id) {
+      return res.status(403).json({ error: 'You can only view documents for applicants to your jobs' });
+    }
+
+    const applicantUserId = application.applicant_id;
+    const { data: documents, error: docsError } = await supabaseAdmin
+      .from('documents')
+      .select('id, document_type, file_name, file_url, uploaded_at')
+      .eq('user_id', applicantUserId)
+      .order('uploaded_at', { ascending: false });
+
+    if (docsError) {
+      return res.status(500).json({ error: docsError.message || 'Failed to fetch documents' });
+    }
+
+    return res.json({ documents: documents || [] });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // PATCH /api/applications/:id - Update application status
 router.patch('/:id', authenticate, async (req, res) => {
   try {
