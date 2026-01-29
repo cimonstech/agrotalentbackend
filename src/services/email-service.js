@@ -27,6 +27,14 @@ function getSiteUrl() {
   return String(raw).replace(/\/+$/, '');
 }
 
+function getLogoUrl() {
+  // Logo should be hosted on R2/CDN for email templates
+  // Update this to your R2/CDN URL when logo is uploaded
+  return process.env.LOGO_URL || 
+         process.env.NEXT_PUBLIC_LOGO_URL || 
+         `${getSiteUrl()}/agrotalent-logo.webp`;
+}
+
 function getDashboardPathForRole(role) {
   // Note: we do NOT have /dashboard (it 404s). Dashboards are role-specific.
   switch (role) {
@@ -207,7 +215,8 @@ export async function sendVerificationEmail(email, token, fullName = '') {
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>🌾 AgroTalent Hub</h1>
+      <img src="${getLogoUrl()}" alt="AgroTalent Hub" style="max-width: 120px; height: auto; margin-bottom: 15px;" />
+      <h1 style="color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px;">AgroTalent Hub</h1>
       <p>Verify Your Email Address</p>
     </div>
     
@@ -424,7 +433,8 @@ export async function sendPasswordResetEmail(email, resetLink, fullName = '') {
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>🌾 AgroTalent Hub</h1>
+      <img src="${getLogoUrl()}" alt="AgroTalent Hub" style="max-width: 120px; height: auto; margin-bottom: 15px;" />
+      <h1 style="color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px;">AgroTalent Hub</h1>
       <p>Reset Your Password</p>
     </div>
     
@@ -606,7 +616,8 @@ export async function sendNotificationEmail(
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>🌾 AgroTalent Hub</h1>
+      <img src="${getLogoUrl()}" alt="AgroTalent Hub" style="max-width: 120px; height: auto; margin-bottom: 15px;" />
+      <h1 style="color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px;">AgroTalent Hub</h1>
       <p style="color: #e8f5e9; font-size: 16px;">${subject}</p>
     </div>
     

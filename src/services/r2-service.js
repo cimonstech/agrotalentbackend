@@ -37,7 +37,11 @@ export async function uploadToR2(fileBuffer, fileName, contentType) {
 
     // Return public URL (if you have a custom domain) or use presigned URL
     if (process.env.R2_PUBLIC_URL) {
-      return `${process.env.R2_PUBLIC_URL}/${fileName}`;
+      // Ensure URL has protocol
+      const publicUrl = process.env.R2_PUBLIC_URL.startsWith('http') 
+        ? process.env.R2_PUBLIC_URL 
+        : `https://${process.env.R2_PUBLIC_URL}`;
+      return `${publicUrl}/${fileName}`;
     }
 
     // Generate presigned URL (valid for 1 year)
