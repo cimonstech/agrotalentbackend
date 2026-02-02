@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 
@@ -8,6 +9,9 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Compression (gzip) for smaller responses over the network
+app.use(compression());
 
 // CORS configuration
 app.use(cors({
