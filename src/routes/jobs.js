@@ -276,4 +276,46 @@ router.patch('/:id', authenticate, async (req, res) => {
   }
 });
 
+// DELETE /api/jobs/:id - Delete job (Farm own jobs or Admin any job)
+router.delete('/:id', authenticate, async (req, res) => {
+  try {
+    const supabase = req.supabase || getSupabaseClient();
+    const supabaseAdmin = getSupabaseAdminClient();
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', req.user.id)
+      .single();
+
+    if (!profile || (profile.role !== 'farm' && profile.role !== 'admin')) {
+      return res.status(403).json({ error: 'Only employers/farms and admins can delete jobs' });
+    }
+
+    const { data: existingJob } = await supabaseAdmin
+      .from('jobs')
+      .select('farm_id')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!existingJob) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (profile.role === 'farm' && existingJob.farm_id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only delete jobs you posted' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('jobs')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+    return res.status(204).send();
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

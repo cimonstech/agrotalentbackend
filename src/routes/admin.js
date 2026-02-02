@@ -1151,6 +1151,19 @@ router.get('/jobs', requireAdmin, async (req, res) => {
   }
 });
 
+// DELETE /api/admin/jobs - Delete all jobs (Admin only)
+router.delete('/jobs', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { error } = await supabaseAdmin.from('jobs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
+    return res.status(204).send();
+  } catch (error) {
+    console.error('Admin delete all jobs error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to delete jobs' });
+  }
+});
+
 // GET /api/admin/applications - List all applications
 router.get('/applications', requireAdmin, async (req, res) => {
   try {
