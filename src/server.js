@@ -1,13 +1,28 @@
+import * as Sentry from '@sentry/node';
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 
-// Load environment variables
+// Load environment variables first
 dotenv.config();
 
+// Sentry must be initialized before any other imports that might throw
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.1,
+  });
+}
+
 const app = express();
+
+// Sentry request handler must be the first middleware
+if (process.env.SENTRY_DSN) {
+  app.use(Sentry.Handlers.requestHandler());
+}
 const PORT = process.env.PORT || 3001;
 
 // Compression (gzip) for smaller responses over the network
@@ -76,9 +91,17 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/placements', placementsRoutes);
 
+// Sentry error handler must be before other error handlers
+if (process.env.SENTRY_DSN) {
+  app.use(Sentry.Handlers.errorHandler());
+}
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(err);
+  }
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })

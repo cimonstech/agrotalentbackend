@@ -20,6 +20,7 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.490.0",
+    "@sentry/node": "^8.0.0",
     "compression": "^1.7.4",
     "@aws-sdk/s3-request-presigner": "^3.490.0",
     "@supabase/supabase-js": "^2.39.0",
