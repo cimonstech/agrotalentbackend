@@ -277,6 +277,7 @@ router.get('/', authenticate, async (req, res) => {
 router.post('/', authenticate, async (req, res) => {
   try {
     const supabase = req.supabase;
+    const supabaseAdmin = getSupabaseAdminClient();
     // Check if user is verified graduate/student
     const { data: profile } = await supabase
       .from('profiles')

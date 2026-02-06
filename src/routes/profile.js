@@ -107,7 +107,21 @@ router.get('/', authenticate, async (req, res) => {
       }
       throw error;
     }
-    
+
+    // Ensure admin users always get role=admin and is_verified=true in the response
+    // (fixes wrong/missing profile data when admin was created outside the app)
+    const adminEmails = (process.env.ADMIN_EMAILS || '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    const isAdmin =
+      profile.role === 'admin' ||
+      (req.user.user_metadata && req.user.user_metadata.role === 'admin') ||
+      (req.user.email && adminEmails.includes(req.user.email.toLowerCase()));
+    if (isAdmin) {
+      profile = { ...profile, role: 'admin', is_verified: true };
+    }
+
     return res.json({ profile });
   } catch (error) {
     console.error('Profile fetch error:', error);

@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { sendNotificationEmail } from '../services/email-service.js';
@@ -924,15 +925,17 @@ router.post('/users/create', requireAdmin, async (req, res) => {
       });
     }
 
-    // Create auth user
+    // Build user_metadata so trigger handle_new_user can satisfy profile CHECK constraints (farm_name / institution_name)
+    const userMetadata = { full_name: full_name || '', role };
+    if (role === 'farm') userMetadata.farm_name = farm_name || 'Unknown';
+    if (role === 'graduate' || role === 'student') userMetadata.institution_name = institution_name || 'Unknown';
+
+    // Create auth user (trigger creates profile with id, email, role, full_name, farm_name or institution_name)
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: {
-        full_name: full_name || '',
-        role,
-      }
+      user_metadata: userMetadata,
     });
 
     if (authError) throw authError;
@@ -941,38 +944,38 @@ router.post('/users/create', requireAdmin, async (req, res) => {
       return res.status(500).json({ error: 'Failed to create user' });
     }
 
-    // Create profile
-    const profileData = {
-      id: authData.user.id,
-      email,
+    // Update profile with extra fields (trigger already created the row)
+    const profileUpdate = {
       full_name: full_name || null,
       phone: phone || null,
-      role,
       is_verified: is_verified || false,
     };
 
     if (is_verified) {
-      profileData.verified_at = new Date().toISOString();
-      profileData.verified_by = req.user.id;
+      profileUpdate.verified_at = new Date().toISOString();
+      profileUpdate.verified_by = req.user.id;
     }
 
     if (role === 'farm') {
-      profileData.farm_name = farm_name;
-      profileData.farm_type = farm_type || null;
-      profileData.farm_location = farm_location || null;
+      profileUpdate.farm_name = farm_name;
+      profileUpdate.farm_type = farm_type || null;
+      profileUpdate.farm_location = farm_location || null;
     }
 
     if (role === 'graduate' || role === 'student') {
-      profileData.institution_name = institution_name;
-      profileData.institution_type = institution_type || null;
-      profileData.qualification = qualification || null;
-      profileData.specialization = specialization || null;
-      profileData.preferred_region = preferred_region || null;
+      profileUpdate.institution_name = institution_name;
+      profileUpdate.institution_type = institution_type || null;
+      profileUpdate.qualification = qualification || null;
+      profileUpdate.specialization = specialization || null;
+      profileUpdate.preferred_region = preferred_region || null;
     }
 
-    const { error: profileError } = await supabase
+    const { data: updatedProfile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .insert(profileData);
+      .update(profileUpdate)
+      .eq('id', authData.user.id)
+      .select()
+      .single();
 
     if (profileError) {
       await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
@@ -981,13 +984,63 @@ router.post('/users/create', requireAdmin, async (req, res) => {
 
     return res.status(201).json({
       user: authData.user,
-      profile: profileData,
+      profile: updatedProfile,
       message: 'User created successfully'
     });
   } catch (error) {
     return res.status(500).json({
       error: error.message || 'Failed to create user'
     });
+  }
+});
+
+// POST /api/admin/ensure-unknown-farm - Get or create the "Farm (unknown)" placeholder for admin job posting
+const UNKNOWN_FARM_EMAIL = 'unknown-farm@system.agrotalenthub.internal';
+router.post('/ensure-unknown-farm', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { data: existing } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('role', 'farm')
+      .eq('email', UNKNOWN_FARM_EMAIL)
+      .maybeSingle();
+
+    if (existing) {
+      return res.json({ profile: existing });
+    }
+
+    const password = crypto.randomBytes(24).toString('hex');
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email: UNKNOWN_FARM_EMAIL,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: 'Farm (unknown)', role: 'farm', farm_name: 'Farm (unknown)' },
+    });
+
+    if (authError) {
+      return res.status(500).json({ error: authError.message || 'Failed to create placeholder farm' });
+    }
+    if (!authData.user) {
+      return res.status(500).json({ error: 'Failed to create placeholder farm' });
+    }
+
+    // Trigger handle_new_user already created the profile; update is_verified and return it
+    const { data: updatedProfile, error: updateError } = await supabaseAdmin
+      .from('profiles')
+      .update({ is_verified: true })
+      .eq('id', authData.user.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+      return res.status(500).json({ error: updateError.message || 'Failed to update placeholder profile' });
+    }
+
+    return res.json({ profile: updatedProfile });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Failed to ensure unknown farm' });
   }
 });
 
