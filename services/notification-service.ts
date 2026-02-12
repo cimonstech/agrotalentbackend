@@ -217,6 +217,17 @@ export class NotificationService {
 
     if (!application) return
 
+    const { data: profile } = await this.supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', application.applicant_id)
+      .single()
+
+    const role = profile?.role || 'graduate'
+    const applicationsPath = role === 'student' ? '/dashboard/student/applications'
+      : role === 'skilled' ? '/dashboard/skilled/applications'
+      : '/dashboard/graduate/applications'
+
     const statusMessages: Record<string, string> = {
       reviewing: 'Your application is being reviewed',
       shortlisted: 'Congratulations! You have been shortlisted',
@@ -229,7 +240,7 @@ export class NotificationService {
       type: 'application_status',
       title: 'Application Status Updated',
       message: `${statusMessages[status] || 'Your application status has changed'} for: ${application.jobs?.title}`,
-      link: `/dashboard/applications/${applicationId}`,
+      link: `${applicationsPath}/${applicationId}`,
       sendEmail: true,
       sendSMS: status === 'accepted' // Send SMS for important updates
     })

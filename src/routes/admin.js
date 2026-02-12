@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { requireAdmin } from '../middleware/auth.js';
+import { uploadSingleImage } from '../middleware/upload.js';
 import { sendNotificationEmail } from '../services/email-service.js';
 
 const router = express.Router();
@@ -128,15 +129,32 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
     } else {
       let query = supabaseAdmin
         .from('profiles')
-        .select('id, email, full_name, phone, role');
+        .select('id, email, full_name, phone, role')
+        .limit(2000);
 
       if (recipients === 'farms') query = query.eq('role', 'farm');
       if (recipients === 'graduates') query = query.eq('role', 'graduate');
       if (recipients === 'students') query = query.eq('role', 'student');
       // 'all' -> no filter
 
-      const { data } = await query;
-      targets = data || [];
+      const { data: profileRows } = await query;
+      const profiles = profileRows || [];
+
+      // Fill in missing emails from auth.users (profile.email can be null if not synced)
+      const authEmailById = {};
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
+        const users = listData?.users || [];
+        users.forEach((u) => { authEmailById[u.id] = u.email || null; });
+        hasMore = users.length === 1000;
+        page += 1;
+      }
+      targets = profiles.map((p) => ({
+        ...p,
+        email: (p.email && p.email.trim()) ? p.email.trim() : (authEmailById[p.id] || null)
+      }));
     }
 
     const recipientCount = targets.length;
@@ -164,13 +182,17 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
 
     let successCount = 0;
     let failureCount = 0;
+    let skippedCount = 0;
     const failures = [];
 
     if (type === 'email') {
       const { sendNotificationEmail } = await import('../services/email-service.js');
 
       for (const t of targets) {
-        if (!t.email) continue;
+        if (!t.email || !String(t.email).trim()) {
+          skippedCount += 1;
+          continue;
+        }
         const result = await sendNotificationEmail(t.email, subject, message, t.full_name || '', { role: t.role });
         if (result?.success) {
           successCount += 1;
@@ -200,18 +222,187 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
         .eq('id', logId);
     }
 
+    const messageText = type === 'sms'
+      ? 'SMS provider not configured yet. Logged the attempt.'
+      : (skippedCount > 0
+        ? `Email sent to ${successCount}, ${failureCount} failed, ${skippedCount} skipped (no email address).`
+        : `Email sent to ${successCount}, ${failureCount} failed.`);
+
     return res.json({
-      message: type === 'sms'
-        ? 'SMS provider not configured yet. Logged the attempt.'
-        : 'Message sent',
+      message: messageText,
       logId,
       recipientCount,
       successCount,
-      failureCount
+      failureCount,
+      skippedCount
     });
   } catch (error) {
     console.error('Communications send error:', error);
     return res.status(500).json({ error: error.message || 'Failed to send message' });
+  }
+});
+
+// ============================================
+// NOTICES (admin create; users see on Notices page + in notifications)
+// ============================================
+
+// GET /api/admin/notices - List all notices (admin)
+router.get('/notices', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { data, error } = await supabaseAdmin
+      .from('notices')
+      .select('id, title, body_html, link, audience, attachments, created_by, created_at')
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      if (error.message?.includes('does not exist')) return res.json({ notices: [] });
+      throw error;
+    }
+    return res.json({ notices: data || [] });
+  } catch (error) {
+    console.error('Admin notices list error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to fetch notices' });
+  }
+});
+
+// POST /api/admin/notices/upload-image - Upload a picture for a notice (admin)
+router.post('/notices/upload-image', requireAdmin, (req, res, next) => {
+  uploadSingleImage('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Invalid file' });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const { uploadToR2 } = await import('../services/r2-service.js');
+    const safeName = (req.file.originalname || 'image').replace(/[^a-zA-Z0-9.-]/g, '_');
+    const key = `notices/${crypto.randomUUID()}_${safeName}`;
+    const publicUrl = await uploadToR2(req.file.buffer, key, req.file.mimetype);
+    return res.status(201).json({ url: publicUrl, file_name: req.file.originalname || 'image' });
+  } catch (error) {
+    console.error('Notice image upload error:', error);
+    return res.status(500).json({ error: error?.message || 'Upload failed' });
+  }
+});
+
+// Helper: create a notice row and notifications for all non-admin users in audience
+async function createNoticeAndNotify(supabaseAdmin, { title, body_html, link, audience, created_by, attachments }) {
+  const attachmentsList = Array.isArray(attachments) ? attachments : [];
+  const { data: notice, error: insertError } = await supabaseAdmin
+    .from('notices')
+    .insert({
+      title,
+      body_html,
+      link: link || null,
+      audience,
+      created_by,
+      attachments: attachmentsList.length ? attachmentsList : []
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+
+  let roleFilter = supabaseAdmin.from('profiles').select('id, role, full_name, email').neq('role', 'admin');
+  if (audience !== 'all') roleFilter = roleFilter.eq('role', audience);
+  const { data: profiles } = await roleFilter.limit(5000);
+  const profilesList = profiles || [];
+
+  // Students use graduate dashboard; link must be /dashboard/graduate/notices/id so layout doesn't redirect
+  const noticeDetailPath = (role) => `/dashboard/${role === 'student' ? 'graduate' : role}/notices/${notice.id}`;
+  const noticeLink = (link && link.trim()) ? link.trim() : null;
+  const notificationRows = profilesList.map((p) => ({
+    user_id: p.id,
+    type: 'notice',
+    title,
+    message: title,
+    link: noticeLink || noticeDetailPath(p.role),
+    read: false,
+    notice_id: notice.id
+  }));
+
+  if (notificationRows.length) {
+    const { error: notifError } = await supabaseAdmin.from('notifications').insert(notificationRows);
+    if (notifError) console.warn('Notice notifications insert failed (ignored):', notifError.message);
+  }
+
+  return { notice, notificationCount: profilesList.length, profilesList };
+}
+
+// POST /api/admin/notices - Create notice and notify all non-admin users in audience
+router.post('/notices', requireAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient();
+    const { title, body_html, link, audience, attachments } = req.body || {};
+
+    if (!title || !body_html || !audience) {
+      return res.status(400).json({ error: 'title, body_html, and audience are required' });
+    }
+    const allowedAudience = new Set(['all', 'graduate', 'farm', 'student']);
+    if (!allowedAudience.has(audience)) {
+      return res.status(400).json({ error: 'audience must be one of: all, graduate, farm, student' });
+    }
+
+    const attachmentsList = Array.isArray(attachments)
+      ? attachments.filter((a) => a && a.url && typeof a.url === 'string')
+      : [];
+
+    const { notice, notificationCount, profilesList: targetProfiles } = await createNoticeAndNotify(supabaseAdmin, {
+      title,
+      body_html,
+      link,
+      audience,
+      created_by: req.user.id,
+      attachments: attachmentsList
+    });
+
+    // Send notice by email to the same audience (merge auth emails like communications)
+    let emailSent = 0;
+    let emailSkipped = 0;
+    const authEmailById = {};
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
+      const users = listData?.users || [];
+      users.forEach((u) => { authEmailById[u.id] = u.email || null; });
+      hasMore = users.length === 1000;
+      page += 1;
+    }
+    const plainBody = (html) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const notificationsUrl = (role) => `/dashboard/${role}/notifications`;
+    for (const p of targetProfiles) {
+      const email = (p.email && String(p.email).trim()) ? p.email.trim() : authEmailById[p.id];
+      if (!email) {
+        emailSkipped += 1;
+        continue;
+      }
+      const result = await sendNotificationEmail(
+        email,
+        title,
+        plainBody(body_html) || title,
+        p.full_name || '',
+        { ctaUrl: notificationsUrl(p.role), ctaText: 'View in Notifications', role: p.role }
+      );
+      if (result?.success) emailSent += 1;
+    }
+
+    return res.status(201).json({
+      notice,
+      notificationCount,
+      emailSent,
+      emailSkipped,
+      message: notificationCount
+        ? `Notice created. ${notificationCount} user(s) notified in-app; ${emailSent} email(s) sent${emailSkipped ? `, ${emailSkipped} skipped (no email).` : '.'}`
+        : 'Notice created; no users in audience.'
+    });
+  } catch (error) {
+    console.error('Admin notices create error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to create notice' });
   }
 });
 
@@ -385,6 +576,22 @@ router.post('/trainings', requireAdmin, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Create a notice so it appears in user notifications; link is left unset so each notification gets /dashboard/{role}/notices/{id}
+    try {
+      const noticeTitle = `New training: ${title}`;
+      const noticeBody = `<p>${noticeTitle}</p><p>${description || ''}</p><p>Region: ${region} • Category: ${category}</p>`;
+      await createNoticeAndNotify(supabase, {
+        title: noticeTitle,
+        body_html: noticeBody,
+        link: null,
+        audience: 'all',
+        created_by: req.user.id
+      });
+    } catch (e) {
+      console.warn('Training notice creation failed (ignored):', e?.message);
+    }
+
     return res.status(201).json({ training: session });
   } catch (error) {
     console.error('Admin trainings create error:', error);

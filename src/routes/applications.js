@@ -572,7 +572,7 @@ router.patch('/:id', authenticate, async (req, res) => {
       try {
         const { sendNotificationEmail } = await import('../services/email-service.js');
         
-        // Determine dashboard path based on applicant role
+        // Determine dashboard path based on applicant role (include application id for View Details)
         const getDashboardPath = (role) => {
           switch (role) {
             case 'student': return '/dashboard/student/applications';
@@ -593,7 +593,8 @@ router.patch('/:id', authenticate, async (req, res) => {
           applicantRole = applicantProfile?.role || 'graduate';
         }
         
-        const dashboardPath = getDashboardPath(applicantRole || 'graduate');
+        const dashboardPathBase = getDashboardPath(applicantRole || 'graduate');
+        const dashboardPath = `${dashboardPathBase}/${application.id}`;
         const jobTitle = application.jobs?.title || 'the position';
         const farmName = application.jobs?.profiles?.farm_name || application.jobs?.farm_name || 'the employer';
         const applicantName = application.applicant?.full_name || 'Applicant';
