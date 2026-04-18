@@ -1,24 +1,24 @@
 import express from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { queryParamToString } from '../lib/query.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
-// GET /api/training - Get "my trainings" (assigned sessions + attendance status)
 router.get('/', authenticate, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const upcoming = req.query.upcoming === 'true';
-    const category = req.query.category;
-    const status = req.query.status;
+    const category = queryParamToString(req.query.category);
+    const status = queryParamToString(req.query.status);
 
-    // Find assignments for this user
     const { data: assignments, error: assignmentsError } = await supabaseAdmin
       .from('training_participants')
       .select('session_id, attendance_status, checked_in_at, notes')
-      .eq('participant_id', req.user.id);
+      .eq('participant_id', (req as AuthRequest).user.id);
 
-    // If table doesn't exist yet, return empty
     if (assignmentsError) {
       if (assignmentsError.message?.includes('does not exist')) {
         return res.json({ sessions: [] });
@@ -26,7 +26,7 @@ router.get('/', authenticate, async (req, res) => {
       throw assignmentsError;
     }
 
-    const sessionIds = (assignments || []).map(a => a.session_id);
+    const sessionIds = (assignments || []).map((a: { session_id: string }) => a.session_id);
     if (sessionIds.length === 0) {
       return res.json({ sessions: [] });
     }
@@ -44,8 +44,13 @@ router.get('/', authenticate, async (req, res) => {
     const { data: sessions, error: sessionsError } = await query;
     if (sessionsError) throw sessionsError;
 
-    const assignmentMap = new Map((assignments || []).map(a => [a.session_id, a]));
-    const enriched = (sessions || []).map(s => ({
+    const assignmentMap = new Map((assignments || []).map((a: {
+      session_id: string;
+      attendance_status: string | null;
+      checked_in_at: string | null;
+      notes: string | null;
+    }) => [a.session_id, a]));
+    const enriched = (sessions || []).map((s: { id: string }) => ({
       ...s,
       my_attendance_status: assignmentMap.get(s.id)?.attendance_status || null,
       my_checked_in_at: assignmentMap.get(s.id)?.checked_in_at || null,
@@ -54,12 +59,8 @@ router.get('/', authenticate, async (req, res) => {
 
     return res.json({ sessions: enriched });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
-
-// NOTE:
-// Admin creation/assignment/attendance endpoints live under /api/admin/trainings
-// (to keep "control + proof" admin-owned and consistent with RLS).
 
 export default router;

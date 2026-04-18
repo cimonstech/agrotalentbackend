@@ -1,5 +1,9 @@
-import express from 'express';
-import { getSupabaseClient } from '../lib/supabase.js';
+import express from 'express'
+import { getSupabaseClient } from '../lib/supabase.js'
+import { errorMessage } from '../lib/errors.js'
+import { publicFormLimiter } from '../middleware/rateLimiter.js'
+import { validate } from '../lib/validate.js'
+import { contactSchema } from '../lib/schemas.js'
 
 const router = express.Router();
 
@@ -7,7 +11,7 @@ const router = express.Router();
 const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL || 'AgroTalent Hub <notifications@agrotalenthub.com>';
 
 // POST /api/contact - Submit contact form
-router.post('/', async (req, res) => {
+router.post('/', publicFormLimiter, validate(contactSchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const { name, email, phone, subject, message } = req.body;
@@ -72,7 +76,7 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to submit contact form'
+      error: errorMessage(error) || 'Failed to submit contact form'
     });
   }
 });

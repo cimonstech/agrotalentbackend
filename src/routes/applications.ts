@@ -1,10 +1,44 @@
 import express from 'express';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { queryParamToString } from '../lib/query.js';
+import { errorMessage } from '../lib/errors.js'
+import { validate } from '../lib/validate.js'
+import {
+  createApplicationSchema,
+  updateApplicationStatusSchema,
+} from '../lib/schemas.js'
+import { calculateMatchScore } from '../services/matching-service.js';
+import { sendApplicationReceivedEmail, sendApplicationStatusEmail } from '../services/email-service.js';
+import { schedulePlacementConfirmedEmail } from './placements.js';
 
 const router = express.Router();
 
-const escapeHtml = (value) => {
+function relationOne<T>(rel: T | T[] | null | undefined): T | undefined {
+  if (rel == null) return undefined;
+  return Array.isArray(rel) ? rel[0] : rel;
+}
+
+interface ApplicantAgg {
+  id: string;
+  full_name: string;
+  email: string;
+  is_verified: boolean;
+  role: string | null;
+  total_applications: number;
+  applications: Array<{
+    id: string;
+    job_id: string;
+    job_title: string;
+    status: string;
+    match_score: number | null;
+    created_at: string;
+  }>;
+  latest_application_date: string | null;
+}
+
+const escapeHtml = (value: unknown) => {
   if (value === null || value === undefined) return '';
   return String(value)
     .replace(/&/g, '&amp;')
@@ -18,15 +52,15 @@ const escapeHtml = (value) => {
 router.get('/applicants', authenticate, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
-    const page = Math.max(parseInt(req.query.page || '1'), 1);
-    const requestedLimit = parseInt(req.query.limit || '25');
+    const page = Math.max(parseInt(queryParamToString(req.query.page) || '1', 10), 1);
+    const requestedLimit = parseInt(queryParamToString(req.query.limit) || '25', 10);
     const limit = Math.min(Math.max(requestedLimit, 1), 100);
     
     // Use admin client to fetch profile to bypass RLS
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (profileError || !profile) {
@@ -42,7 +76,7 @@ router.get('/applicants', authenticate, async (req, res) => {
     const { data: farmJobs } = await supabaseAdmin
       .from('jobs')
       .select('id, title')
-      .eq('farm_id', req.user.id);
+      .eq('farm_id', (req as AuthRequest).user.id);
     
     const jobIds = farmJobs?.map(j => j.id) || [];
     
@@ -89,38 +123,39 @@ router.get('/applicants', authenticate, async (req, res) => {
     }
     
     // Group applications by applicant_id to get unique applicants
-    const applicantsMap = new Map();
+    const applicantsMap = new Map<string, ApplicantAgg>();
     
-    (applications || []).forEach((app) => {
-      const applicantId = app.applicant_id;
+    (applications || []).forEach((app: Record<string, unknown>) => {
+      const applicantId = app.applicant_id as string;
+      const applicantRow = relationOne(app.applicant as { full_name?: string; email?: string; is_verified?: boolean; role?: string } | null);
+      const jobRow = relationOne(app.jobs as { title?: string } | null);
       
       if (!applicantsMap.has(applicantId)) {
         applicantsMap.set(applicantId, {
           id: applicantId,
-          full_name: app.applicant?.full_name || 'N/A',
-          email: app.applicant?.email || 'N/A',
-          is_verified: app.applicant?.is_verified || false,
-          role: app.applicant?.role || null,
+          full_name: applicantRow?.full_name || 'N/A',
+          email: applicantRow?.email || 'N/A',
+          is_verified: applicantRow?.is_verified || false,
+          role: applicantRow?.role || null,
           total_applications: 0,
           applications: [],
           latest_application_date: null
         });
       }
       
-      const applicant = applicantsMap.get(applicantId);
+      const applicant = applicantsMap.get(applicantId)!;
       applicant.total_applications += 1;
       applicant.applications.push({
-        id: app.id,
-        job_id: app.job_id,
-        job_title: app.jobs?.title || 'N/A',
-        status: app.status,
-        match_score: app.match_score,
-        created_at: app.created_at
+        id: String(app.id),
+        job_id: String(app.job_id),
+        job_title: jobRow?.title || 'N/A',
+        status: String(app.status),
+        match_score: (app.match_score as number | null) ?? null,
+        created_at: String(app.created_at)
       });
       
-      // Update latest application date
-      if (!applicant.latest_application_date || new Date(app.created_at) > new Date(applicant.latest_application_date)) {
-        applicant.latest_application_date = app.created_at;
+      if (!applicant.latest_application_date || new Date(String(app.created_at)) > new Date(applicant.latest_application_date)) {
+        applicant.latest_application_date = String(app.created_at);
       }
     });
     
@@ -148,21 +183,21 @@ router.get('/applicants', authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error('[GET /applicants] Error:', error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // GET /api/applications - Get applications (role-based)
 router.get('/', authenticate, async (req, res) => {
   try {
-    const supabase = req.supabase;
+    const supabase = (req as AuthRequest).supabase;
     const supabaseAdmin = getSupabaseAdminClient();
     
     // Use admin client to fetch profile to bypass RLS
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (profileError || !profile) {
@@ -178,7 +213,7 @@ router.get('/', authenticate, async (req, res) => {
       const { data: farmJobs } = await supabaseAdmin
         .from('jobs')
         .select('id')
-        .eq('farm_id', req.user.id);
+        .eq('farm_id', (req as AuthRequest).user.id);
       
       const jobIds = farmJobs?.map(j => j.id) || [];
       
@@ -261,7 +296,7 @@ router.get('/', authenticate, async (req, res) => {
             )
           )
         `)
-        .eq('applicant_id', req.user.id)
+        .eq('applicant_id', (req as AuthRequest).user.id)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -269,93 +304,112 @@ router.get('/', authenticate, async (req, res) => {
       return res.json({ applications: data || [] });
     }
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // POST /api/applications - Create application
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, validate(createApplicationSchema), async (req, res) => {
   try {
-    const supabase = req.supabase;
+    const supabase = (req as AuthRequest).supabase;
     const supabaseAdmin = getSupabaseAdminClient();
-    // Check if user is verified graduate/student
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role, is_verified')
-      .eq('id', req.user.id)
+      .select('*')
+      .eq('id', (req as AuthRequest).user.id)
       .single();
-    
+
     if (!profile || !['graduate', 'student', 'skilled'].includes(profile.role)) {
       return res.status(403).json({
         error: 'Only verified graduates, students, and skilled workers can apply'
       });
     }
-    
+
     if (!profile.is_verified) {
       return res.status(403).json({
         error: 'Your profile must be verified before applying'
       });
     }
-    
+
     const { job_id, cover_letter } = req.body;
-    
-    // Validate job_id is provided
+
     if (!job_id) {
       return res.status(400).json({
         error: 'Job ID is required'
       });
     }
-    
-    // Check if job exists and is active
-    const { data: job } = await supabase
+
+    const { data: jobFull, error: jobFetchError } = await supabase
       .from('jobs')
-      .select('id, status, max_applications, application_count')
+      .select('*')
       .eq('id', job_id)
       .single();
-    
-    if (!job || job.status !== 'active') {
-      return res.status(404).json({
-        error: 'Job not found or not active'
+
+    if (jobFetchError || !jobFull || jobFull.status !== 'active') {
+      return res.status(400).json({
+        error: 'Job not found or no longer active'
       });
     }
-    
-    // Check if already applied
+
     const { data: existing } = await supabase
       .from('applications')
       .select('id')
       .eq('job_id', job_id)
-      .eq('applicant_id', req.user.id)
+      .eq('applicant_id', (req as AuthRequest).user.id)
       .single();
-    
+
     if (existing) {
       return res.status(400).json({
         error: 'You have already applied for this job'
       });
     }
-    
-    // Create application
+
+    const score = calculateMatchScore(
+      jobFull as Record<string, unknown>,
+      profile as Record<string, unknown>
+    );
+
     const { data: application, error } = await supabase
       .from('applications')
       .insert({
         job_id,
-        applicant_id: req.user.id,
+        applicant_id: (req as AuthRequest).user.id,
         cover_letter: cover_letter || null,
-        status: 'pending'
+        status: 'pending',
+        match_score: score,
       })
       .select()
       .single();
-    
+
     if (error) throw error;
-    
-    // Update job application count
+
     await supabaseAdmin
       .from('jobs')
-      .update({ application_count: (job.application_count || 0) + 1 })
+      .update({ application_count: (jobFull.application_count || 0) + 1 })
       .eq('id', job_id);
-    
+
+    void (async () => {
+      const admin = getSupabaseAdminClient();
+      const { data: farm } = await admin
+        .from('profiles')
+        .select('email, farm_name, full_name')
+        .eq('id', jobFull.farm_id)
+        .single();
+      const applicantName =
+        (profile as { full_name?: string | null }).full_name ?? 'Applicant';
+      if (farm?.email) {
+        await sendApplicationReceivedEmail(
+          farm.email,
+          farm.farm_name ?? farm.full_name ?? 'Farm',
+          applicantName,
+          String(jobFull.title)
+        );
+      }
+    })().catch(console.error);
+
     return res.status(201).json({ application });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -368,7 +422,7 @@ router.get('/:id/documents', authenticate, async (req, res) => {
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
 
     if (profileError || !profile || profile.role !== 'farm') {
@@ -385,8 +439,9 @@ router.get('/:id/documents', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    const farmId = application.jobs?.farm_id;
-    if (!farmId || farmId !== req.user.id) {
+    const jobsRel = relationOne(application.jobs as { farm_id?: string } | null);
+    const farmId = jobsRel?.farm_id;
+    if (!farmId || farmId !== (req as AuthRequest).user.id) {
       return res.status(403).json({ error: 'You can only view documents for applicants to your jobs' });
     }
 
@@ -403,23 +458,26 @@ router.get('/:id/documents', authenticate, async (req, res) => {
 
     return res.json({ documents: documents || [] });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // PATCH /api/applications/:id - Update application status
-router.patch('/:id', authenticate, async (req, res) => {
+router.patch(
+  '/:id',
+  authenticate,
+  validate(updateApplicationStatusSchema),
+  async (req, res) => {
   try {
-    // Use authenticated client from middleware (req.supabase) or admin client to bypass RLS
-    const supabase = req.supabase || getSupabaseClient();
+    const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
     
     // Use admin client to fetch profile to ensure we can read it regardless of RLS
-    console.log('[PATCH /applications/:id] Checking user role for:', req.user.id);
+    console.log('[PATCH /applications/:id] Checking user role for:', (req as AuthRequest).user.id);
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role, id')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     console.log('[PATCH /applications/:id] Profile fetch result:', { profile, profileError });
@@ -435,7 +493,7 @@ router.patch('/:id', authenticate, async (req, res) => {
     console.log('[PATCH /applications/:id] User role:', profile.role);
     
     if (!['farm', 'admin'].includes(profile.role)) {
-      console.error('[PATCH /applications/:id] Invalid role:', profile.role, 'for user:', req.user.id);
+      console.error('[PATCH /applications/:id] Invalid role:', profile.role, 'for user:', (req as AuthRequest).user.id);
       return res.status(403).json({
         error: 'Only employers/farms and admins can update application status',
         userRole: profile.role
@@ -471,25 +529,30 @@ router.patch('/:id', authenticate, async (req, res) => {
       console.error('[PATCH /applications/:id] Application fetch error:', appError);
       return res.status(404).json({ error: 'Application not found' });
     }
+
+    const jobRel = relationOne(application.jobs as {
+      farm_id?: string;
+      title?: string;
+      profiles?: { farm_name?: string } | { farm_name?: string }[] | null;
+    } | null);
     
     console.log('[PATCH /applications/:id] Application IDs:', {
       id: application.id,
       applicantId: application.applicant_id,
       jobId: application.job_id,
-      farmId: application.jobs?.farm_id
+      farmId: jobRel?.farm_id
     });
     
     // Verify farm owns this job (unless admin)
-    if (profile.role === 'farm' && application.jobs.farm_id !== req.user.id) {
+    if (profile.role === 'farm' && jobRel?.farm_id !== (req as AuthRequest).user.id) {
       return res.status(403).json({
         error: 'You can only update applications for your own jobs'
       });
     }
     
-    // Update application
-    const updateData = {
+    const updateData: Record<string, unknown> = {
       status,
-      reviewed_by: req.user.id,
+      reviewed_by: (req as AuthRequest).user.id,
       reviewed_at: new Date().toISOString()
     };
     
@@ -504,7 +567,7 @@ router.patch('/:id', authenticate, async (req, res) => {
         .insert({
           application_id: req.params.id,
           job_id: application.job_id,
-          farm_id: application.jobs.farm_id,
+          farm_id: jobRel?.farm_id,
           graduate_id: application.applicant_id,
           status: 'pending'
         })
@@ -512,13 +575,20 @@ router.patch('/:id', authenticate, async (req, res) => {
         .single();
       
       if (placementError) throw placementError;
-      
+
+      schedulePlacementConfirmedEmail({
+        graduate_id: placement.graduate_id,
+        farm_id: placement.farm_id,
+        job_id: placement.job_id,
+        start_date: placement.start_date ?? null,
+      });
+
       // Create payment record
       await supabaseAdmin
         .from('payments')
         .insert({
           placement_id: placement.id,
-          farm_id: application.jobs.farm_id,
+          farm_id: jobRel?.farm_id,
           amount: 200.00,
           status: 'pending'
         });
@@ -538,42 +608,59 @@ router.patch('/:id', authenticate, async (req, res) => {
       .single();
     
     if (error) throw error;
-    
-    // Send email notification when application status changes
-    // Fetch applicant email if not already in application object
-    let applicantEmail = application.applicant?.email;
+
+    if (typeof status === 'string' && status.length > 0) {
+      void (async () => {
+        const admin = getSupabaseAdminClient();
+        const { data: applicantProfile } = await admin
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', application.applicant_id)
+          .single();
+        const { data: jobRow } = await admin
+          .from('jobs')
+          .select('title')
+          .eq('id', application.job_id)
+          .single();
+        if (applicantProfile?.email && jobRow?.title) {
+          await sendApplicationStatusEmail(
+            applicantProfile.email,
+            applicantProfile.full_name ?? 'Applicant',
+            jobRow.title,
+            status,
+            typeof review_notes === 'string' ? review_notes : undefined
+          );
+        }
+      })().catch(console.error);
+    }
+
+    const applicantRow = relationOne(application.applicant as { email?: string; full_name?: string; role?: string } | null);
+    let applicantEmail = applicantRow?.email;
     if (!applicantEmail && application.applicant_id) {
       const { data: applicantProfile } = await supabaseAdmin
         .from('profiles')
         .select('email, full_name, role')
         .eq('id', application.applicant_id)
         .single();
-      
+
       if (applicantProfile) {
         applicantEmail = applicantProfile.email;
-        // Merge applicant data if not already present
-        if (!application.applicant) {
-          application.applicant = applicantProfile;
+        const appMut = application as Record<string, unknown>;
+        if (!applicantRow) {
+          appMut.applicant = applicantProfile;
         } else {
-          application.applicant.email = applicantEmail;
-          application.applicant.full_name = application.applicant.full_name || applicantProfile.full_name;
-          application.applicant.role = application.applicant.role || applicantProfile.role;
+          const merged = { ...applicantRow, ...applicantProfile };
+          merged.email = applicantEmail;
+          merged.full_name = applicantRow.full_name || applicantProfile.full_name;
+          merged.role = applicantRow.role || applicantProfile.role;
+          appMut.applicant = merged;
         }
       }
     }
-    
-    console.log('[PATCH /applications/:id] Email notification check:', {
-      applicantEmail,
-      status,
-      willSend: applicantEmail && ['accepted', 'rejected', 'shortlisted'].includes(status)
-    });
-    
+
     if (applicantEmail && ['accepted', 'rejected', 'shortlisted'].includes(status)) {
       try {
-        const { sendNotificationEmail } = await import('../services/email-service.js');
-        
-        // Determine dashboard path based on applicant role (include application id for View Details)
-        const getDashboardPath = (role) => {
+        const getDashboardPath = (role: string) => {
           switch (role) {
             case 'student': return '/dashboard/student/applications';
             case 'skilled': return '/dashboard/skilled/applications';
@@ -581,9 +668,9 @@ router.patch('/:id', authenticate, async (req, res) => {
             default: return '/dashboard/graduate/applications';
           }
         };
-        
-        // Get applicant role - try from application object first, then fetch if needed
-        let applicantRole = application.applicant?.role;
+
+        const applicantForNotif = relationOne(application.applicant as { email?: string; full_name?: string; role?: string } | null);
+        let applicantRole = applicantForNotif?.role;
         if (!applicantRole && application.applicant_id) {
           const { data: applicantProfile } = await supabaseAdmin
             .from('profiles')
@@ -592,82 +679,33 @@ router.patch('/:id', authenticate, async (req, res) => {
             .single();
           applicantRole = applicantProfile?.role || 'graduate';
         }
-        
+
         const dashboardPathBase = getDashboardPath(applicantRole || 'graduate');
         const dashboardPath = `${dashboardPathBase}/${application.id}`;
-        const jobTitle = application.jobs?.title || 'the position';
-        const farmName = application.jobs?.profiles?.farm_name || application.jobs?.farm_name || 'the employer';
-        const applicantName = application.applicant?.full_name || 'Applicant';
+        const jobTitle = jobRel?.title || 'the position';
+        const profilesRel = relationOne(jobRel?.profiles ?? null);
+        const farmName = profilesRel?.farm_name || 'the employer';
         const safeJobTitle = escapeHtml(jobTitle);
         const safeFarmName = escapeHtml(farmName);
-        const safeApplicantName = escapeHtml(applicantName);
-        
-        let emailSubject = '';
-        let emailMessage = '';
+
         let notificationTitle = '';
         let notificationMessage = '';
         let notificationType = '';
-        
+
         if (status === 'accepted') {
-          emailSubject = 'Application Accepted - AgroTalent Hub';
-          emailMessage = `
-            <p>Congratulations, ${safeApplicantName}!</p>
-            <p>We're excited to inform you that your application for <strong>${safeJobTitle}</strong> at <strong>${safeFarmName}</strong> has been <strong>accepted</strong>!</p>
-            <p>The employer has reviewed your application and would like to move forward with your placement.</p>
-            <p><strong>Next Steps:</strong></p>
-            <ul>
-              <li>You will receive further instructions about the placement process</li>
-              <li>Payment processing will be initiated by the employer</li>
-              <li>You can track your placement status in your dashboard</li>
-            </ul>
-            <p>Log in to your dashboard to view more details and track your placement progress.</p>
-          `;
           notificationTitle = 'Application Accepted!';
           notificationMessage = `Your application for ${safeJobTitle} at ${safeFarmName} has been accepted!`;
           notificationType = 'application_accepted';
         } else if (status === 'rejected') {
-          emailSubject = 'Application Update - AgroTalent Hub';
-          emailMessage = `
-            <p>Hello ${safeApplicantName},</p>
-            <p>Thank you for your interest in the position of <strong>${safeJobTitle}</strong> at <strong>${safeFarmName}</strong>.</p>
-            <p>After careful consideration, we regret to inform you that your application was not selected for this position at this time.</p>
-            <p>We encourage you to continue exploring other opportunities on our platform. We have many exciting positions available that may be a great fit for your skills and experience.</p>
-            <p>Keep checking your dashboard for new job postings that match your profile.</p>
-          `;
           notificationTitle = 'Application Update';
           notificationMessage = `Your application for ${safeJobTitle} at ${safeFarmName} was not selected.`;
           notificationType = 'application_rejected';
         } else if (status === 'shortlisted') {
-          emailSubject = 'Application Shortlisted - AgroTalent Hub';
-          emailMessage = `
-            <p>Hello ${safeApplicantName},</p>
-            <p>Great news! Your application for <strong>${safeJobTitle}</strong> at <strong>${safeFarmName}</strong> has been <strong>shortlisted</strong>!</p>
-            <p>The employer is interested in your profile and you're one step closer to being selected for this position.</p>
-            <p>You may be contacted for further information or an interview. Please keep an eye on your dashboard and email for updates.</p>
-            <p>We wish you the best of luck!</p>
-          `;
           notificationTitle = 'Application Shortlisted!';
           notificationMessage = `Your application for ${safeJobTitle} at ${safeFarmName} has been shortlisted!`;
           notificationType = 'application_shortlisted';
         }
-        
-        const emailResult = await sendNotificationEmail(
-          application.applicant.email,
-          emailSubject,
-          emailMessage,
-          applicantName,
-          {
-            role: applicantRole || 'graduate',
-            ctaUrl: dashboardPath,
-            ctaText: 'View Application'
-          }
-        );
-        
-        if (!emailResult.success) {
-          console.warn(`Failed to send ${status} email:`, emailResult.error);
-        }
-        
-        // Also create an in-app notification
+
         await supabaseAdmin
           .from('notifications')
           .insert({
@@ -677,15 +715,14 @@ router.patch('/:id', authenticate, async (req, res) => {
             message: notificationMessage,
             link: dashboardPath
           });
-      } catch (emailError) {
-        console.error(`Error sending ${status} email:`, emailError);
-        // Don't fail the application update if email fails
+      } catch (notifError) {
+        console.error(`Error creating ${status} notification:`, notifError);
       }
     }
-    
+
     return res.json({ application: updated });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

@@ -1,11 +1,24 @@
-import express from 'express';
-import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
+import express, { type Request } from 'express'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
+import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js'
+import { errorMessage } from '../lib/errors.js'
+import { sendWelcomeEmail } from '../services/email-service.js'
+import { authLimiter } from '../middleware/rateLimiter.js'
+import { validate } from '../lib/validate.js'
+import {
+  signUpSchema,
+  signInSchema,
+  resetPasswordSchema,
+  resetPasswordBodySchema,
+} from '../lib/schemas.js'
 
 const router = express.Router();
 
-// Helper to get user from request (via token)
-const getUserFromRequest = async (req, supabaseClient) => {
-  const supabase = supabaseClient || getSupabaseClient();
+const getUserFromRequest = async (
+  req: Request,
+  supabaseClient?: SupabaseClient
+): Promise<User | null> => {
+  const supabase = supabaseClient ?? getSupabaseClient();
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
@@ -19,7 +32,7 @@ const getUserFromRequest = async (req, supabaseClient) => {
 };
 
 // POST /api/auth/signup
-router.post('/signup', async (req, res) => {
+router.post('/signup', authLimiter, validate(signUpSchema), async (req, res) => {
   try {
     console.log('Signup request received:', { 
       email: req.body?.email, 
@@ -81,8 +94,7 @@ router.post('/signup', async (req, res) => {
       });
     }
 
-    // Create profile with role-specific data
-    const profileData = {
+    const profileData: Record<string, unknown> = {
       id: authData.user.id,
       email,
       full_name: full_name || null,
@@ -187,6 +199,8 @@ router.post('/signup', async (req, res) => {
 
     console.log('Profile created successfully:', JSON.stringify(profileResult, null, 2));
 
+    void sendWelcomeEmail(email, full_name || 'Member', role).catch(console.error);
+
     // Send welcome/verification email via Resend (even though email is auto-confirmed)
     // This is a welcome email that also serves as verification confirmation
     if (authData.user) {
@@ -197,7 +211,8 @@ router.post('/signup', async (req, res) => {
         const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
         const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
           type: 'signup',
-          email: email,
+          email,
+          password,
           options: {
             redirectTo: `${siteUrl}/verify-email`,
           },
@@ -233,13 +248,13 @@ router.post('/signup', async (req, res) => {
   } catch (error) {
     console.error('Signup error:', error);
     return res.status(500).json({
-      error: error.message || 'Failed to create account'
+      error: errorMessage(error) || 'Failed to create account'
     });
   }
 });
 
 // POST /api/auth/signin
-router.post('/signin', async (req, res) => {
+router.post('/signin', authLimiter, validate(signInSchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const { email, password } = req.body;
@@ -250,11 +265,12 @@ router.post('/signin', async (req, res) => {
       });
     }
 
-    // Sign in user
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    let signIn = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+    let authData = signIn.data;
+    const authError = signIn.error;
 
     if (authError) {
       if (authError.message.includes('Invalid login credentials')) {
@@ -298,9 +314,7 @@ router.post('/signin', async (req, res) => {
               throw retryError;
             }
             
-            // Use the retry auth data
-            authData.user = retryAuthData.user;
-            authData.session = retryAuthData.session;
+            authData = retryAuthData;
           } else {
             return res.status(403).json({
               error: 'Admin account found but could not be verified. Please contact support.'
@@ -343,7 +357,7 @@ router.post('/signin', async (req, res) => {
   } catch (error) {
     console.error('Signin error:', error);
     return res.status(500).json({
-      error: error.message || 'Failed to sign in'
+      error: errorMessage(error) || 'Failed to sign in'
     });
   }
 });
@@ -363,13 +377,13 @@ router.post('/signout', async (req, res) => {
     return res.json({ message: 'Signed out successfully' });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to sign out'
+      error: errorMessage(error) || 'Failed to sign out'
     });
   }
 });
 
 // POST /api/auth/forgot-password
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', validate(resetPasswordSchema), async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { email } = req.body;
@@ -439,22 +453,20 @@ router.post('/forgot-password', async (req, res) => {
   } catch (error) {
     console.error('Forgot password error:', error);
     return res.status(500).json({
-      error: error.message || 'Failed to send password reset email'
+      error: errorMessage(error) || 'Failed to send password reset email'
     });
   }
 });
 
 // POST /api/auth/reset-password
-router.post('/reset-password', async (req, res) => {
+router.post(
+  '/reset-password',
+  authLimiter,
+  validate(resetPasswordBodySchema),
+  async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const { password, token } = req.body;
-
-    if (!password || password.length < 6) {
-      return res.status(400).json({
-        error: 'Password must be at least 6 characters'
-      });
-    }
 
     // If token is provided, use it to set session first
     if (token) {
@@ -492,7 +504,7 @@ router.post('/reset-password', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to reset password'
+      error: errorMessage(error) || 'Failed to reset password'
     });
   }
 });
@@ -518,7 +530,7 @@ router.post('/verify-email', async (req, res) => {
       options: {
         redirectTo: `${siteUrl}/verify-email`,
       },
-    });
+    } as never);
 
     if (linkError) {
       if (linkError.message.includes('already verified')) {
@@ -551,7 +563,7 @@ router.post('/verify-email', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to send verification email'
+      error: errorMessage(error) || 'Failed to send verification email'
     });
   }
 });

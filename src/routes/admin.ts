@@ -1,22 +1,60 @@
 import express from 'express';
 import crypto from 'crypto';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { uploadSingleImage } from '../middleware/upload.js';
 import { sendNotificationEmail } from '../services/email-service.js';
+import type { AdminAuthRequest } from '../types/auth.js';
+import { queryParamToString } from '../lib/query.js';
+import { errorMessage } from '../lib/errors.js'
+import { validate } from '../lib/validate.js'
+import {
+  createNoticeSchema,
+  createTrainingSchema,
+  createUserSchema,
+  verifyUserSchema,
+} from '../lib/schemas.js'
 
 const router = express.Router();
+
+interface CreateNoticePayload {
+  title: string;
+  body_html: string;
+  link: string | null;
+  audience: string;
+  created_by: string;
+  attachments?: unknown;
+}
+
+interface ProfileTargetRow {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+  phone: string | null;
+  role: string;
+}
+
+interface AssignTargetRow {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+  phone: string | null;
+  role: string;
+  preferred_region?: string | null;
+  farm_location?: string | null;
+}
 
 // GET /api/admin/users - List all users
 router.get('/users', requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS and see all users
     const supabaseAdmin = getSupabaseAdminClient();
-    const role = req.query.role;
-    const verified = req.query.verified;
-    const search = req.query.search;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const roleParam = queryParamToString(req.query.role);
+    const verifiedParam = queryParamToString(req.query.verified);
+    const searchParam = queryParamToString(req.query.search);
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
     
     let query = supabaseAdmin
@@ -24,16 +62,16 @@ router.get('/users', requireAdmin, async (req, res) => {
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false });
     
-    if (role) {
-      query = query.eq('role', role);
+    if (roleParam) {
+      query = query.eq('role', roleParam);
     }
     
-    if (verified === 'true' || verified === 'false') {
-      query = query.eq('is_verified', verified === 'true');
+    if (verifiedParam === 'true' || verifiedParam === 'false') {
+      query = query.eq('is_verified', verifiedParam === 'true');
     }
     
-    if (search) {
-      query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,farm_name.ilike.%${search}%,institution_name.ilike.%${search}%`);
+    if (searchParam) {
+      query = query.or(`full_name.ilike.%${searchParam}%,email.ilike.%${searchParam}%,farm_name.ilike.%${searchParam}%,institution_name.ilike.%${searchParam}%`);
     }
     
     query = query.range(offset, offset + limit - 1);
@@ -56,7 +94,7 @@ router.get('/users', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin users fetch error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch users' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch users' });
   }
 });
 
@@ -68,7 +106,7 @@ router.get('/users', requireAdmin, async (req, res) => {
 router.get('/communications/logs', requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
-    const limit = parseInt(req.query.limit || '50');
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
 
     const { data: logs, error } = await supabaseAdmin
       .from('communication_logs')
@@ -87,7 +125,7 @@ router.get('/communications/logs', requireAdmin, async (req, res) => {
     return res.json({ logs: logs || [] });
   } catch (error) {
     console.error('Communications logs error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch logs' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch logs' });
   }
 });
 
@@ -106,7 +144,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
     }
 
     // Resolve recipients
-    let targets = [];
+    let targets: ProfileTargetRow[] = [];
 
     if (recipients === 'single') {
       if (userId) {
@@ -141,13 +179,13 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
       const profiles = profileRows || [];
 
       // Fill in missing emails from auth.users (profile.email can be null if not synced)
-      const authEmailById = {};
+      const authEmailById: Record<string, string | null> = {};
       let page = 1;
       let hasMore = true;
       while (hasMore) {
         const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
         const users = listData?.users || [];
-        users.forEach((u) => { authEmailById[u.id] = u.email || null; });
+        users.forEach((u: User) => { authEmailById[u.id] = u.email ?? null; });
         hasMore = users.length === 1000;
         page += 1;
       }
@@ -169,7 +207,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
       success_count: 0,
       failure_count: 0,
       status: 'sending',
-      created_by: req.user.id
+      created_by: (req as AdminAuthRequest).user.id
     };
 
     let logId = null;
@@ -238,7 +276,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Communications send error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to send message' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to send message' });
   }
 });
 
@@ -263,7 +301,7 @@ router.get('/notices', requireAdmin, async (req, res) => {
     return res.json({ notices: data || [] });
   } catch (error) {
     console.error('Admin notices list error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch notices' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch notices' });
   }
 });
 
@@ -285,12 +323,14 @@ router.post('/notices/upload-image', requireAdmin, (req, res, next) => {
     return res.status(201).json({ url: publicUrl, file_name: req.file.originalname || 'image' });
   } catch (error) {
     console.error('Notice image upload error:', error);
-    return res.status(500).json({ error: error?.message || 'Upload failed' });
+    return res.status(500).json({ error: errorMessage(error) || 'Upload failed' });
   }
 });
 
-// Helper: create a notice row and notifications for all non-admin users in audience
-async function createNoticeAndNotify(supabaseAdmin, { title, body_html, link, audience, created_by, attachments }) {
+async function createNoticeAndNotify(
+  supabaseAdmin: SupabaseClient,
+  { title, body_html, link, audience, created_by, attachments }: CreateNoticePayload
+) {
   const attachmentsList = Array.isArray(attachments) ? attachments : [];
   const { data: notice, error: insertError } = await supabaseAdmin
     .from('notices')
@@ -310,10 +350,9 @@ async function createNoticeAndNotify(supabaseAdmin, { title, body_html, link, au
   let roleFilter = supabaseAdmin.from('profiles').select('id, role, full_name, email').neq('role', 'admin');
   if (audience !== 'all') roleFilter = roleFilter.eq('role', audience);
   const { data: profiles } = await roleFilter.limit(5000);
-  const profilesList = profiles || [];
+  const profilesList = (profiles || []) as ProfileTargetRow[];
 
-  // Students use graduate dashboard; link must be /dashboard/graduate/notices/id so layout doesn't redirect
-  const noticeDetailPath = (role) => `/dashboard/${role === 'student' ? 'graduate' : role}/notices/${notice.id}`;
+  const noticeDetailPath = (role: string) => `/dashboard/${role === 'student' ? 'graduate' : role}/notices/${notice.id}`;
   const noticeLink = (link && link.trim()) ? link.trim() : null;
   const notificationRows = profilesList.map((p) => ({
     user_id: p.id,
@@ -334,7 +373,7 @@ async function createNoticeAndNotify(supabaseAdmin, { title, body_html, link, au
 }
 
 // POST /api/admin/notices - Create notice and notify all non-admin users in audience
-router.post('/notices', requireAdmin, async (req, res) => {
+router.post('/notices', requireAdmin, validate(createNoticeSchema), async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { title, body_html, link, audience, attachments } = req.body || {};
@@ -356,25 +395,25 @@ router.post('/notices', requireAdmin, async (req, res) => {
       body_html,
       link,
       audience,
-      created_by: req.user.id,
+      created_by: (req as AdminAuthRequest).user.id,
       attachments: attachmentsList
     });
 
     // Send notice by email to the same audience (merge auth emails like communications)
     let emailSent = 0;
     let emailSkipped = 0;
-    const authEmailById = {};
+    const authEmailById: Record<string, string | null> = {};
     let page = 1;
     let hasMore = true;
     while (hasMore) {
       const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
       const users = listData?.users || [];
-      users.forEach((u) => { authEmailById[u.id] = u.email || null; });
+      users.forEach((u: User) => { authEmailById[u.id] = u.email ?? null; });
       hasMore = users.length === 1000;
       page += 1;
     }
-    const plainBody = (html) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    const notificationsUrl = (role) => `/dashboard/${role}/notifications`;
+    const plainBody = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const notificationsUrl = (role: string) => `/dashboard/${role}/notifications`;
     for (const p of targetProfiles) {
       const email = (p.email && String(p.email).trim()) ? p.email.trim() : authEmailById[p.id];
       if (!email) {
@@ -402,7 +441,7 @@ router.post('/notices', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin notices create error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to create notice' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to create notice' });
   }
 });
 
@@ -438,7 +477,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
     return res.json({ settings: { ...DEFAULT_SETTINGS, ...(data?.value || {}) } });
   } catch (error) {
     console.error('Admin settings GET error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch settings' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch settings' });
   }
 });
 
@@ -456,7 +495,7 @@ router.put('/settings', requireAdmin, async (req, res) => {
         {
           key: 'global',
           value: merged,
-          updated_by: req.user.id,
+          updated_by: (req as AdminAuthRequest).user.id,
           updated_at: new Date().toISOString()
         },
         { onConflict: 'key' }
@@ -469,7 +508,7 @@ router.put('/settings', requireAdmin, async (req, res) => {
     return res.json({ settings: data?.value || merged, message: 'Settings saved' });
   } catch (error) {
     console.error('Admin settings PUT error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to save settings' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to save settings' });
   }
 });
 
@@ -487,8 +526,8 @@ router.get('/trainings', requireAdmin, async (req, res) => {
     const upcoming = req.query.upcoming === 'true';
     const startDate = req.query.start_date;
     const endDate = req.query.end_date;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
 
     let query = supabase
@@ -519,12 +558,12 @@ router.get('/trainings', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin trainings fetch error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch trainings' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch trainings' });
   }
 });
 
 // POST /api/admin/trainings - create session
-router.post('/trainings', requireAdmin, async (req, res) => {
+router.post('/trainings', requireAdmin, validate(createTrainingSchema), async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const {
@@ -570,7 +609,7 @@ router.post('/trainings', requireAdmin, async (req, res) => {
         zoom_link: zoom_link || null,
         attendance_method: attendance_method || 'manual',
         status: 'scheduled',
-        created_by: req.user.id
+        created_by: (req as AdminAuthRequest).user.id
       })
       .select()
       .single();
@@ -586,16 +625,16 @@ router.post('/trainings', requireAdmin, async (req, res) => {
         body_html: noticeBody,
         link: null,
         audience: 'all',
-        created_by: req.user.id
+        created_by: (req as AdminAuthRequest).user.id
       });
     } catch (e) {
-      console.warn('Training notice creation failed (ignored):', e?.message);
+      console.warn('Training notice creation failed (ignored):', errorMessage(e));
     }
 
     return res.status(201).json({ training: session });
   } catch (error) {
     console.error('Admin trainings create error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to create training' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to create training' });
   }
 });
 
@@ -639,7 +678,7 @@ router.get('/trainings/:id', requireAdmin, async (req, res) => {
     return res.json({ training, participants: participants || [] });
   } catch (error) {
     console.error('Admin training detail error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch training' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch training' });
   }
 });
 
@@ -650,7 +689,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
     const { userIds, role, region, search, notify_email, notify_sms } = req.body || {};
 
     // Resolve targets
-    let targets = [];
+    let targets: AssignTargetRow[] = [];
     if (Array.isArray(userIds) && userIds.length) {
       const { data, error } = await supabase
         .from('profiles')
@@ -684,7 +723,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
     const rows = targets.map(t => ({
       session_id: req.params.id,
       participant_id: t.id,
-      assigned_by: req.user.id
+      assigned_by: (req as AdminAuthRequest).user.id
     }));
 
     const { data: inserted, error: insertError } = await supabase
@@ -701,7 +740,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
 
     // Create in-app notifications
     try {
-      const trainingLinkForRole = (role) => {
+      const trainingLinkForRole = (role: string) => {
         switch (role) {
           case 'admin':
             return '/dashboard/admin/training';
@@ -749,7 +788,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
 
       for (const t of targets) {
         try {
-          const trainingLinkForRole = (role) => {
+          const trainingLinkForRole = (role: string) => {
             switch (role) {
               case 'admin':
                 return '/dashboard/admin/training';
@@ -767,7 +806,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
           };
 
           await sendNotificationEmail(
-            t.email,
+            t.email || '',
             'Training Assigned - AgroTalent Hub',
             `You have been assigned to a training session: <b>${training?.title || 'Training Session'}</b><br/><br/>
             <b>Date/Time:</b> ${training?.scheduled_at ? new Date(training.scheduled_at).toLocaleString() : ''}<br/>
@@ -797,7 +836,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
             total_recipients: targets.length,
             successful_count: 0,
             failed_count: targets.length,
-            created_by: req.user.id
+            created_by: (req as AdminAuthRequest).user.id
           });
         if (smsLogError) {
           console.warn('Training SMS log insert failed (ignored):', smsLogError.message);
@@ -810,7 +849,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
     return res.json({ assigned: inserted?.length || 0, targets });
   } catch (error) {
     console.error('Admin training assign error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to assign participants' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to assign participants' });
   }
 });
 
@@ -851,23 +890,26 @@ router.put('/trainings/:id/attendance', requireAdmin, async (req, res) => {
         .filter(r => r.attendance_status === 'present' || r.attendance_status === 'late')
         .map(r => r.participant_id);
       if (completedIds.length) {
-        await supabase
-          .from('placements')
-          .update({
-            training_completed: true,
-            training_completed_at: new Date().toISOString(),
-            zoom_session_attended: true
-          })
-          .in('graduate_id', completedIds)
-          .eq('status', 'pending')
-          .catch(() => {});
+        try {
+          await supabase
+            .from('placements')
+            .update({
+              training_completed: true,
+              training_completed_at: new Date().toISOString(),
+              zoom_session_attended: true
+            })
+            .in('graduate_id', completedIds)
+            .eq('status', 'pending');
+        } catch {
+          // ignore (matches previous fire-and-forget .catch)
+        }
       }
     }
 
     return res.json({ updated: data || [] });
   } catch (error) {
     console.error('Admin training attendance error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to update attendance' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to update attendance' });
   }
 });
 
@@ -980,7 +1022,7 @@ router.get('/users/:id', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching user details:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch user details' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch user details' });
   }
 });
 
@@ -991,8 +1033,8 @@ router.get('/documents', requireAdmin, async (req, res) => {
     const documentType = req.query.document_type;
     const status = req.query.status;
     const search = req.query.search;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
 
     let query = supabaseAdmin
@@ -1039,7 +1081,7 @@ router.get('/documents', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin documents fetch error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch documents' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch documents' });
   }
 });
 
@@ -1051,7 +1093,7 @@ router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
       .from('documents')
       .update({
         status: 'approved',
-        reviewed_by: req.user.id,
+        reviewed_by: (req as AdminAuthRequest).user.id,
         reviewed_at: new Date().toISOString(),
         rejection_reason: null
       })
@@ -1063,7 +1105,7 @@ router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
     return res.json({ document });
   } catch (error) {
     console.error('Admin document approve error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to approve document' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to approve document' });
   }
 });
 
@@ -1076,7 +1118,7 @@ router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
       .from('documents')
       .update({
         status: 'rejected',
-        reviewed_by: req.user.id,
+        reviewed_by: (req as AdminAuthRequest).user.id,
         reviewed_at: new Date().toISOString(),
         rejection_reason: reason || null
       })
@@ -1088,12 +1130,12 @@ router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
     return res.json({ document });
   } catch (error) {
     console.error('Admin document reject error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to reject document' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to reject document' });
   }
 });
 
 // POST /api/admin/users/create - Create user
-router.post('/users/create', requireAdmin, async (req, res) => {
+router.post('/users/create', requireAdmin, validate(createUserSchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
@@ -1132,8 +1174,7 @@ router.post('/users/create', requireAdmin, async (req, res) => {
       });
     }
 
-    // Build user_metadata so trigger handle_new_user can satisfy profile CHECK constraints (farm_name / institution_name)
-    const userMetadata = { full_name: full_name || '', role };
+    const userMetadata: Record<string, unknown> = { full_name: full_name || '', role };
     if (role === 'farm') userMetadata.farm_name = farm_name || 'Unknown';
     if (role === 'graduate' || role === 'student') userMetadata.institution_name = institution_name || 'Unknown';
 
@@ -1151,8 +1192,7 @@ router.post('/users/create', requireAdmin, async (req, res) => {
       return res.status(500).json({ error: 'Failed to create user' });
     }
 
-    // Update profile with extra fields (trigger already created the row)
-    const profileUpdate = {
+    const profileUpdate: Record<string, unknown> = {
       full_name: full_name || null,
       phone: phone || null,
       is_verified: is_verified || false,
@@ -1160,7 +1200,7 @@ router.post('/users/create', requireAdmin, async (req, res) => {
 
     if (is_verified) {
       profileUpdate.verified_at = new Date().toISOString();
-      profileUpdate.verified_by = req.user.id;
+      profileUpdate.verified_by = (req as AdminAuthRequest).user.id;
     }
 
     if (role === 'farm') {
@@ -1196,7 +1236,7 @@ router.post('/users/create', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to create user'
+      error: errorMessage(error) || 'Failed to create user'
     });
   }
 });
@@ -1247,12 +1287,12 @@ router.post('/ensure-unknown-farm', requireAdmin, async (req, res) => {
 
     return res.json({ profile: updatedProfile });
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'Failed to ensure unknown farm' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to ensure unknown farm' });
   }
 });
 
 // POST /api/admin/verify/:id - Verify user
-router.post('/verify/:id', requireAdmin, async (req, res) => {
+router.post('/verify/:id', requireAdmin, validate(verifyUserSchema), async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabaseAdmin = getSupabaseAdminClient();
@@ -1261,7 +1301,7 @@ router.post('/verify/:id', requireAdmin, async (req, res) => {
     const updateData = {
       is_verified: verified !== undefined ? verified : true,
       verified_at: verified !== undefined && verified ? new Date().toISOString() : null,
-      verified_by: verified !== undefined && verified ? req.user.id : null
+      verified_by: verified !== undefined && verified ? (req as AdminAuthRequest).user.id : null
     };
     
     // Use maybeSingle() instead of single() to handle cases where profile might not exist
@@ -1283,7 +1323,7 @@ router.post('/verify/:id', requireAdmin, async (req, res) => {
     
     // Create in-app notification
     if (verified) {
-      const dashboardPathForRole = (role) => {
+      const dashboardPathForRole = (role: string) => {
         switch (role) {
           case 'admin':
             return '/dashboard/admin';
@@ -1339,7 +1379,7 @@ router.post('/verify/:id', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin verify error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to verify user' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to verify user' });
   }
 });
 
@@ -1352,8 +1392,8 @@ router.get('/jobs', requireAdmin, async (req, res) => {
     const farmId = req.query.farm_id;
     const location = req.query.location;
     const jobType = req.query.job_type;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '100');
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '100', 10);
     const offset = (page - 1) * limit;
     
     let query = supabaseAdmin
@@ -1407,7 +1447,7 @@ router.get('/jobs', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin jobs fetch error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch jobs' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch jobs' });
   }
 });
 
@@ -1420,7 +1460,7 @@ router.delete('/jobs', requireAdmin, async (req, res) => {
     return res.status(204).send();
   } catch (error) {
     console.error('Admin delete all jobs error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to delete jobs' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to delete jobs' });
   }
 });
 
@@ -1429,11 +1469,11 @@ router.get('/applications', requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
-    const status = req.query.status;
-    const jobId = req.query.job_id;
-    const applicantId = req.query.applicant_id;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const status = queryParamToString(req.query.status);
+    const jobId = queryParamToString(req.query.job_id);
+    const applicantId = queryParamToString(req.query.applicant_id);
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
     
     let query = supabase
@@ -1498,7 +1538,7 @@ router.get('/applications', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -1507,12 +1547,12 @@ router.get('/placements', requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
-    const status = req.query.status;
-    const region = req.query.region;
-    const startDate = req.query.start_date;
-    const endDate = req.query.end_date;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const status = queryParamToString(req.query.status);
+    const region = queryParamToString(req.query.region);
+    const startDate = queryParamToString(req.query.start_date);
+    const endDate = queryParamToString(req.query.end_date);
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
     
     let query = supabase
@@ -1575,7 +1615,7 @@ router.get('/placements', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -1584,11 +1624,11 @@ router.get('/reports', requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
-    const reportType = req.query.type || 'overview';
-    const startDate = req.query.start_date;
-    const endDate = req.query.end_date;
+    const reportType = queryParamToString(req.query.type) || 'overview';
+    const startDate = queryParamToString(req.query.start_date);
+    const endDate = queryParamToString(req.query.end_date);
     
-    let report = {};
+    const report: Record<string, unknown> = {};
     
     if (reportType === 'overview' || reportType === 'all') {
       // Parallelize all count queries for better performance
@@ -1637,9 +1677,11 @@ router.get('/reports', requireAdmin, async (req, res) => {
         `)
         .in('status', ['active', 'completed']);
       
-      const regionalStats = {};
-      regionalData?.forEach((placement) => {
-        const region = placement.jobs?.location || 'Unknown';
+      const regionalStats: Record<string, number> = {};
+      regionalData?.forEach((placement: { jobs?: { location?: string } | { location?: string }[] | null }) => {
+        const jobsRel = placement.jobs;
+        const jobRow = Array.isArray(jobsRel) ? jobsRel[0] : jobsRel;
+        const region = jobRow?.location || 'Unknown';
         regionalStats[region] = (regionalStats[region] || 0) + 1;
       });
       
@@ -1660,12 +1702,12 @@ router.get('/reports', requireAdmin, async (req, res) => {
       
       const { data: payments } = await paymentQuery;
       
-      const totalRevenue = payments?.reduce((sum, p) => {
-        return sum + (p.status === 'completed' ? parseFloat(p.amount.toString()) : 0);
+      const totalRevenue = payments?.reduce((sum: number, p: { status: string; amount: unknown }) => {
+        return sum + (p.status === 'completed' ? parseFloat(String(p.amount)) : 0);
       }, 0) || 0;
       
-      const pendingPayments = payments?.filter(p => p.status === 'pending').length || 0;
-      const completedPayments = payments?.filter(p => p.status === 'completed').length || 0;
+      const pendingPayments = payments?.filter((p: { status: string }) => p.status === 'pending').length || 0;
+      const completedPayments = payments?.filter((p: { status: string }) => p.status === 'completed').length || 0;
       
       report.payments = {
         total_revenue: totalRevenue,
@@ -1693,7 +1735,7 @@ router.get('/reports', requireAdmin, async (req, res) => {
     
     return res.json({ report });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -1702,15 +1744,15 @@ router.get('/contact', requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
-    const status = req.query.status;
+    const statusParam = queryParamToString(req.query.status);
     
     let query = supabase
       .from('contact_submissions')
       .select('*')
       .order('created_at', { ascending: false });
     
-    if (status) {
-      query = query.eq('status', status);
+    if (statusParam) {
+      query = query.eq('status', statusParam);
     }
     
     const { data: submissions, error } = await query;
@@ -1724,7 +1766,7 @@ router.get('/contact', requireAdmin, async (req, res) => {
     
     return res.json({ submissions: submissions || [] });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -1732,11 +1774,11 @@ router.get('/contact', requireAdmin, async (req, res) => {
 router.get('/payments', requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
-    const status = req.query.status;
-    const startDate = req.query.start_date;
-    const endDate = req.query.end_date;
-    const page = parseInt(req.query.page || '1');
-    const limit = parseInt(req.query.limit || '50');
+    const status = queryParamToString(req.query.status);
+    const startDate = queryParamToString(req.query.start_date);
+    const endDate = queryParamToString(req.query.end_date);
+    const page = parseInt(queryParamToString(req.query.page) || '1', 10);
+    const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
     const offset = (page - 1) * limit;
 
     let query = supabase
@@ -1775,7 +1817,7 @@ router.get('/payments', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Admin payments fetch error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch payments' });
+    return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch payments' });
   }
 });
 

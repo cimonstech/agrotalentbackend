@@ -1,5 +1,6 @@
 import express from 'express';
 import { getSupabaseClient } from '../lib/supabase.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
@@ -58,15 +59,20 @@ router.get('/', async (req, res) => {
     let avgMatchTime = 7;
     if (recentPlacements && recentPlacements.length > 0) {
       const times = recentPlacements
-        .filter(p => p.applications?.created_at)
-        .map(p => {
-          const appDate = new Date(p.applications.created_at);
+        .map((p) => {
+          const apps = p.applications as { created_at?: string } | { created_at?: string }[] | null | undefined;
+          const appRow = Array.isArray(apps) ? apps[0] : apps;
+          return { p, appRow };
+        })
+        .filter(({ appRow }) => !!appRow?.created_at)
+        .map(({ p, appRow }) => {
+          const appDate = new Date(String(appRow!.created_at));
           const placementDate = new Date(p.created_at);
           return Math.ceil((placementDate.getTime() - appDate.getTime()) / (1000 * 60 * 60 * 24));
         });
       
       if (times.length > 0) {
-        avgMatchTime = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+        avgMatchTime = Math.round(times.reduce((a: number, b: number) => a + b, 0) / times.length);
       }
     }
     
@@ -81,7 +87,7 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

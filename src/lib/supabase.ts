@@ -1,11 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// Lazy initialization - clients are created on first use
-let supabase = null;
-let supabaseAdmin = null;
+let supabase: SupabaseClient | null = null;
+let supabaseAdmin: SupabaseClient | null = null;
 
-// Helper function to get Supabase client (lazy initialization)
-export function getSupabaseClient() {
+export function getSupabaseClient(): SupabaseClient {
   if (!supabase) {
     const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -19,9 +17,7 @@ export function getSupabaseClient() {
   return supabase;
 }
 
-// Per-request Supabase client authenticated with the user's access token.
-// This is required for RLS policies that rely on auth.uid().
-export function getSupabaseClientWithAuth(accessToken) {
+export function getSupabaseClientWithAuth(accessToken: string | undefined): SupabaseClient {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -30,7 +26,6 @@ export function getSupabaseClientWithAuth(accessToken) {
   }
 
   if (!accessToken) {
-    // Fall back to anon client if no token provided
     return getSupabaseClient();
   }
 
@@ -48,8 +43,7 @@ export function getSupabaseClientWithAuth(accessToken) {
   });
 }
 
-// Helper function to get Supabase admin client (lazy initialization)
-export function getSupabaseAdminClient() {
+export function getSupabaseAdminClient(): SupabaseClient {
   if (!supabaseAdmin) {
     const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

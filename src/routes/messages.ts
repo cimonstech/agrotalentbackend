@@ -1,6 +1,11 @@
 import express from 'express';
 import { getSupabaseClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { queryParamToString } from '../lib/query.js';
+import { errorMessage } from '../lib/errors.js'
+import { validate } from '../lib/validate.js'
+import { postMessageBodySchema } from '../lib/schemas.js'
 
 const router = express.Router();
 
@@ -8,7 +13,7 @@ const router = express.Router();
 router.get('/', authenticate, async (req, res) => {
   try {
     const supabase = getSupabaseClient();
-    const conversationId = req.query.conversation_id;
+    const conversationId = queryParamToString(req.query.conversation_id);
     
     if (conversationId) {
       // Get messages for a specific conversation
@@ -49,7 +54,7 @@ router.get('/', authenticate, async (req, res) => {
             created_at
           )
         `)
-        .or(`farm_id.eq.${req.user.id},graduate_id.eq.${req.user.id}`)
+        .or(`farm_id.eq.${(req as AuthRequest).user.id},graduate_id.eq.${(req as AuthRequest).user.id}`)
         .order('last_message_at', { ascending: false });
       
       if (error) throw error;
@@ -57,12 +62,12 @@ router.get('/', authenticate, async (req, res) => {
       return res.json({ conversations: conversations || [] });
     }
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // POST /api/messages - Send a message
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, validate(postMessageBodySchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const { conversation_id, recipient_id, job_id, content } = req.body;
@@ -77,7 +82,7 @@ router.post('/', authenticate, async (req, res) => {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (!profile) {
@@ -94,8 +99,8 @@ router.post('/', authenticate, async (req, res) => {
         });
       }
       
-      const farmId = profile.role === 'farm' ? req.user.id : recipient_id;
-      const graduateId = profile.role === 'farm' ? recipient_id : req.user.id;
+      const farmId = profile.role === 'farm' ? (req as AuthRequest).user.id : recipient_id;
+      const graduateId = profile.role === 'farm' ? recipient_id : (req as AuthRequest).user.id;
       
       // Check if conversation already exists
       const { data: existing } = await supabase
@@ -129,7 +134,7 @@ router.post('/', authenticate, async (req, res) => {
       .from('messages')
       .insert({
         conversation_id: conversationId,
-        sender_id: req.user.id,
+        sender_id: (req as AuthRequest).user.id,
         content
       })
       .select()
@@ -150,7 +155,7 @@ router.post('/', authenticate, async (req, res) => {
       .eq('id', conversationId)
       .single();
     
-    const recipientId = conversation?.farm_id === req.user.id 
+    const recipientId = conversation?.farm_id === (req as AuthRequest).user.id 
       ? conversation.graduate_id 
       : conversation?.farm_id;
     
@@ -168,7 +173,7 @@ router.post('/', authenticate, async (req, res) => {
     
     return res.status(201).json({ message });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

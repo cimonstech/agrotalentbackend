@@ -1,11 +1,28 @@
-import express from 'express';
-import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
-import { authenticate } from '../middleware/auth.js';
-
+import express from 'express'
+import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js'
+import { authenticate } from '../middleware/auth.js'
+import type { AuthRequest } from '../types/auth.js'
+import { errorMessage } from '../lib/errors.js'
+import { validate, validateQuery } from '../lib/validate.js'
+import {
+  createJobSchema,
+  updateJobSchema,
+  jobsListQuerySchema,
+} from '../lib/schemas.js'
 const router = express.Router();
 
+const jobListSelect = `
+        *,
+        profiles:farm_id (
+          id,
+          farm_name,
+          farm_location,
+          farm_type
+        )
+      `;
+
 // GET /api/jobs - List jobs with filters
-router.get('/', async (req, res) => {
+router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
   try {
     const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
     const id = searchParams.get('id');
@@ -21,72 +38,61 @@ router.get('/', async (req, res) => {
       ? getSupabaseAdminClient() 
       : getSupabaseClient();
     
+    if (id) {
+      const singleResult = await supabase
+        .from('jobs')
+        .select(jobListSelect)
+        .eq('id', id)
+        .single();
+      if (singleResult.error) throw singleResult.error;
+      return res.json({ job: singleResult.data });
+    }
+
     let query = supabase
       .from('jobs')
-      .select(`
-        *,
-        profiles:farm_id (
-          id,
-          farm_name,
-          farm_location,
-          farm_type
-        )
-      `);
-    
-    if (id) {
-      query = query.eq('id', id).single();
-    } else {
-      if (status && status !== 'all') {
-        query = query.eq('status', status);
-      }
-      // Note: For 'all' status, we'll filter inactive jobs older than 24h after fetching
-      if (location) query = query.eq('location', location);
-      if (jobType) query = query.eq('job_type', jobType);
-      if (specialization) query = query.eq('required_specialization', specialization);
-      if (farmId) query = query.eq('farm_id', farmId);
-      
-      query = query.order('created_at', { ascending: false });
+      .select(jobListSelect);
+
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
     }
-    
+    if (location) query = query.eq('location', location);
+    if (jobType) query = query.eq('job_type', jobType);
+    if (specialization) query = query.eq('required_specialization', specialization);
+    if (farmId) query = query.eq('farm_id', farmId);
+
+    query = query.order('created_at', { ascending: false });
+
     let { data, error } = await query;
-    
+
     if (error) throw error;
-    
-    if (id) {
-      return res.json({ job: data });
-    } else {
-      // Filter out inactive jobs older than 24 hours for public view
-      if (status === 'all' || !status) {
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        data = (data || []).filter((job) => {
-          // Show job if:
-          // 1. Status is not 'inactive', OR
-          // 2. Status is 'inactive' but status_changed_at is within last 24 hours (or null)
-          if (job.status !== 'inactive') return true;
-          if (!job.status_changed_at) return true; // Show if no status_changed_at (backward compatibility)
-          const statusChangedAt = new Date(job.status_changed_at);
-          return statusChangedAt > twentyFourHoursAgo;
-        });
-      }
-      return res.json({ jobs: data || [] });
+
+    if (status === 'all' || !status) {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      data = (data || []).filter((job) => {
+        if (job.status !== 'inactive') return true;
+        if (!job.status_changed_at) return true;
+        const statusChangedAt = new Date(job.status_changed_at);
+        return statusChangedAt > twentyFourHoursAgo;
+      });
     }
+    return res.json({ jobs: data || [] });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // POST /api/jobs - Create job (Farm or Admin)
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
   try {
     // Use authed client so RLS can see auth.uid()
-    const supabase = req.supabase || getSupabaseClient();
+    const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
 
     // Check if user is an employer/farm or admin
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (!profile || (profile.role !== 'farm' && profile.role !== 'admin')) {
@@ -116,7 +122,7 @@ router.post('/', authenticate, async (req, res) => {
     }
     
     // Determine farm_id
-    let targetFarmId = req.user.id;
+    let targetFarmId = (req as AuthRequest).user.id;
     if (profile.role === 'admin') {
       // Admin must specify a farm_id when posting
       if (!farm_id) {
@@ -168,21 +174,21 @@ router.post('/', authenticate, async (req, res) => {
     
     return res.status(201).json({ job });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
 // PATCH /api/jobs/:id - Update job (Farm or Admin)
-router.patch('/:id', authenticate, async (req, res) => {
+router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) => {
   try {
-    const supabase = req.supabase || getSupabaseClient();
+    const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
 
     // Check if user is an employer/farm or admin
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (!profile || (profile.role !== 'farm' && profile.role !== 'admin')) {
@@ -201,7 +207,7 @@ router.patch('/:id', authenticate, async (req, res) => {
     }
     
     // Verify farm owns this job (unless admin)
-    if (profile.role === 'farm' && existingJob.farm_id !== req.user.id) {
+    if (profile.role === 'farm' && existingJob.farm_id !== (req as AuthRequest).user.id) {
       return res.status(403).json({
         error: 'You can only update jobs you posted'
       });
@@ -224,8 +230,7 @@ router.patch('/:id', authenticate, async (req, res) => {
       farm_id  // For admin to reassign job to different farm
     } = req.body;
     
-    // Build update object
-    const updateData = {};
+    const updateData: Record<string, unknown> = {};
     if (title !== undefined) updateData.title = title;
     if (description !== undefined) updateData.description = description;
     if (job_type !== undefined) updateData.job_type = job_type;
@@ -272,7 +277,7 @@ router.patch('/:id', authenticate, async (req, res) => {
     
     return res.json({ job: updated });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -285,7 +290,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
 
     if (!profile || (profile.role !== 'farm' && profile.role !== 'admin')) {
@@ -302,7 +307,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    if (profile.role === 'farm' && existingJob.farm_id !== req.user.id) {
+    if (profile.role === 'farm' && existingJob.farm_id !== (req as AuthRequest).user.id) {
       return res.status(403).json({ error: 'You can only delete jobs you posted' });
     }
 
@@ -314,7 +319,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     if (error) throw error;
     return res.status(204).send();
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

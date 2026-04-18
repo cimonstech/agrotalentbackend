@@ -1,85 +1,109 @@
-import { getSupabaseClient, getSupabaseAdminClient, getSupabaseClientWithAuth } from '../lib/supabase.js';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import type { AdminAuthRequest, AuthRequest } from '../types/auth.js';
+import { getSupabaseAdminClient, getSupabaseClient, getSupabaseClientWithAuth } from '../lib/supabase.js';
 
-// Middleware to authenticate requests
-export const authenticate = async (req, res, next) => {
+export const authenticate: RequestHandler = async (req, res, next) => {
   try {
     const supabase = getSupabaseClient();
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - No token provided' });
     }
-    
+
     const token = authHeader.split('Bearer ')[1];
     const { data: { user }, error } = await supabase.auth.getUser(token);
-    
+
     if (error || !user) {
       return res.status(401).json({ error: 'Unauthorized - Invalid token' });
     }
-    
-    req.user = user;
-    req.accessToken = token;
-    // Attach an authed supabase client for RLS-protected queries
-    req.supabase = getSupabaseClientWithAuth(token);
+
+    const authReq = req as AuthRequest;
+    authReq.user = user;
+    authReq.accessToken = token;
+    authReq.supabase = getSupabaseClientWithAuth(token);
     next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 };
 
-// Middleware to check if user is admin
-export const requireAdmin = async (req, res, next) => {
+export const requireAdmin: RequestHandler = async (req, res, next) => {
   try {
-    // First authenticate the user
     const supabase = getSupabaseClient();
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - No token provided' });
     }
-    
+
     const token = authHeader.split('Bearer ')[1];
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
+
     if (authError || !user) {
       return res.status(401).json({ error: 'Unauthorized - Invalid token' });
     }
-    
-    req.user = user;
-    req.accessToken = token;
-    req.supabase = getSupabaseClientWithAuth(token);
-    
-    // Then check if user is admin
+
+    const adminReq = req as AdminAuthRequest;
+    adminReq.user = user;
+    adminReq.accessToken = token;
+    adminReq.supabase = getSupabaseClientWithAuth(token);
+
     const supabaseAdmin = getSupabaseAdminClient();
-    
+
     const { data: profile, error } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', user.id)
       .single();
-    
+
     if (error || !profile || profile.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
-    
-    req.profile = profile;
+
+    adminReq.profile = profile;
     next();
-  } catch (error) {
+  } catch {
     return res.status(403).json({ error: 'Forbidden' });
   }
 };
 
-// Helper to get user from request
-export const getUserFromRequest = async (req) => {
+export async function getUserFromRequest(req: Request) {
   const supabase = getSupabaseClient();
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
   }
-  
+
   const token = authHeader.split('Bearer ')[1];
   const { data: { user }, error } = await supabase.auth.getUser(token);
-  
+
   if (error || !user) return null;
   return user;
-};
+}
+
+export const requireAuth = authenticate;
+
+export function requireRole(...allowedRoles: string[]): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const authReq = req as AuthRequest;
+      if (!authReq.user?.id) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const supabaseAdmin = getSupabaseAdminClient();
+      const { data: profile, error } = await supabaseAdmin
+        .from('profiles')
+        .select('role')
+        .eq('id', authReq.user.id)
+        .single();
+
+      if (error || !profile?.role || !allowedRoles.includes(profile.role)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      next();
+    } catch {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  };
+}

@@ -1,6 +1,9 @@
 import express from 'express';
 import { getSupabaseClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { queryParamToString } from '../lib/query.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
@@ -35,7 +38,7 @@ router.get('/', async (req, res) => {
     
     return res.json({ jobs: data || [] });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -46,7 +49,7 @@ router.post('/', authenticate, async (req, res) => {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .single();
     
     if (!profile || profile.role !== 'farm') {
@@ -71,7 +74,7 @@ router.post('/', authenticate, async (req, res) => {
     const { data: job, error } = await supabase
       .from('jobs')
       .insert({
-        farm_id: req.user.id,
+        farm_id: (req as AuthRequest).user.id,
         title: title || 'Data Collection Project',
         description,
         job_type: 'data_collector',
@@ -89,7 +92,7 @@ router.post('/', authenticate, async (req, res) => {
     
     return res.status(201).json({ job });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

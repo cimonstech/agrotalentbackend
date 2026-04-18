@@ -2,6 +2,8 @@
 import express from 'express';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
@@ -14,7 +16,7 @@ router.get('/', authenticate, async (req, res) => {
     let query = supabase
       .from('documents')
       .select('*')
-      .eq('user_id', req.user.id)
+      .eq('user_id', (req as AuthRequest).user.id)
       .order('uploaded_at', { ascending: false });
     
     if (document_type) {
@@ -27,7 +29,7 @@ router.get('/', authenticate, async (req, res) => {
     
     return res.json({ documents: documents || [] });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -40,7 +42,7 @@ router.post('/', authenticate, async (req, res, next) => {
     uploadSingle('file')(req, res, next);
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to process upload'
+      error: errorMessage(error) || 'Failed to process upload'
     });
   }
 }, async (req, res) => {
@@ -63,7 +65,7 @@ router.post('/', authenticate, async (req, res, next) => {
 
     // Generate unique filename
     const fileExt = req.file.originalname.split('.').pop();
-    const fileName = `${req.user.id}/documents/${document_type}_${Date.now()}.${fileExt}`;
+    const fileName = `${(req as AuthRequest).user.id}/documents/${document_type}_${Date.now()}.${fileExt}`;
 
     // Upload to R2
     const publicUrl = await uploadToR2(
@@ -76,7 +78,7 @@ router.post('/', authenticate, async (req, res, next) => {
     const { data: document, error: insertError } = await supabaseAdmin
       .from('documents')
       .insert({
-        user_id: req.user.id,
+        user_id: (req as AuthRequest).user.id,
         document_type,
         file_name: req.file.originalname,
         file_url: publicUrl,
@@ -94,7 +96,7 @@ router.post('/', authenticate, async (req, res, next) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to upload document'
+      error: errorMessage(error) || 'Failed to upload document'
     });
   }
 });
@@ -110,7 +112,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       .from('documents')
       .select('*')
       .eq('id', req.params.id)
-      .eq('user_id', req.user.id)
+      .eq('user_id', (req as AuthRequest).user.id)
       .single();
     
     if (fetchError || !document) {
@@ -140,7 +142,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     return res.json({ message: 'Document deleted successfully' });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to delete document'
+      error: errorMessage(error) || 'Failed to delete document'
     });
   }
 });

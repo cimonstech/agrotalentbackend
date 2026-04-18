@@ -1,20 +1,20 @@
-import express from 'express';
+import express, { type Response } from 'express';
 import { authenticate } from '../middleware/auth.js';
-import { MatchingService } from '../../services/matching-service.js';
+import type { AuthRequest } from '../types/auth.js';
+import { MatchingService } from '../services/matching-service.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
-// GET /api/matches - Get job matches
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, async (req, res: Response) => {
   try {
-    const supabase = req.supabase;
+    const { user, supabase } = req as AuthRequest;
     const matching = new MatchingService(supabase);
 
     const jobId = req.query.job_id;
     const applicantId = req.query.applicant_id;
     const allRegions = req.query.all_regions === 'true';
 
-    // 1) Farm/admin view: applicants for a job (uses stored match_score on applications)
     if (jobId && typeof jobId === 'string') {
       const { data: applications, error } = await supabase
         .from('applications')
@@ -35,7 +35,11 @@ router.get('/', authenticate, async (req, res) => {
 
       if (error) throw error;
 
-      const matches = (applications || []).map(app => ({
+      const matches = (applications || []).map((app: {
+        applicant_id: string;
+        match_score: number | null;
+        applicant: unknown;
+      }) => ({
         applicant_id: app.applicant_id,
         job_id: jobId,
         match_score: app.match_score || 0,
@@ -45,13 +49,12 @@ router.get('/', authenticate, async (req, res) => {
       return res.json({ matches });
     }
 
-    // 2) Applicant view: score a specific job for current user
     if (jobId && typeof jobId === 'string' && !applicantId) {
-      const score = await matching.calculateMatchScore(jobId, req.user.id);
+      const score = await matching.calculateMatchScore(jobId, user.id);
       return res.json({
         matches: [
           {
-            applicant_id: req.user.id,
+            applicant_id: user.id,
             job_id: jobId,
             match_score: score
           }
@@ -59,29 +62,30 @@ router.get('/', authenticate, async (req, res) => {
       });
     }
 
-    // 3) Applicant view: jobs for current user (enforces regional placement by default)
     if (applicantId && typeof applicantId === 'string') {
-      // Admin could pass applicant_id; for now only allow current user
-      if (applicantId !== req.user.id) {
+      if (applicantId !== user.id) {
         return res.status(403).json({ error: 'Forbidden' });
       }
     }
 
     if (allRegions) {
-      // Temporarily bypass the location filter by computing matches against all active jobs.
-      // We do this by reading jobs directly and scoring; keep minimum threshold at 30.
       const { data: jobs, error } = await supabase
         .from('jobs')
         .select('*')
         .eq('status', 'active');
       if (error) throw error;
 
-      const scored = [];
+      const scored: Array<{
+        applicant_id: string;
+        job_id: string;
+        match_score: number;
+        job: NonNullable<typeof jobs>[number];
+      }> = [];
       for (const job of jobs || []) {
-        const score = await matching.calculateMatchScore(job.id, req.user.id);
+        const score = await matching.calculateMatchScore(job.id, user.id);
         if (score >= 30) {
           scored.push({
-            applicant_id: req.user.id,
+            applicant_id: user.id,
             job_id: job.id,
             match_score: score,
             job
@@ -92,10 +96,8 @@ router.get('/', authenticate, async (req, res) => {
       return res.json({ matches: scored });
     }
 
-    const matches = await matching.findJobsForGraduate(req.user.id);
+    const matches = await matching.findJobsForGraduate(user.id);
 
-    // Enrich with job details (the service returns ids + score)
-    // Limit to top 20 matches for performance
     const topMatches = matches.slice(0, 20);
     const jobIds = topMatches.map(m => m.job_id);
     if (jobIds.length === 0) return res.json({ matches: [] });
@@ -126,7 +128,7 @@ router.get('/', authenticate, async (req, res) => {
 
     return res.json({ matches: enriched });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

@@ -4,6 +4,31 @@
 // Do NOT snapshot process.env at module load time. In ESM, imports are evaluated
 // before server.js runs dotenv.config(), so top-level env reads can be undefined.
 
+import { Resend } from 'resend';
+import { errorMessage } from '../lib/errors.js';
+
+const EMAIL_FROM_NOREPLY = 'AgroTalent Hub <noreply@agrotalenthub.com>';
+
+function escapeEmailHtml(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getFrontendBaseUrl(): string {
+  return String(process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+}
+
+export interface NotificationEmailOptions {
+  ctaText?: string;
+  ctaUrl?: string;
+  role?: string;
+}
+
 function getResendApiKey() {
   return process.env.RESEND_API_KEY;
 }
@@ -35,7 +60,7 @@ function getLogoUrl() {
          `${getSiteUrl()}/agrotalent-logo.webp`;
 }
 
-function getDashboardPathForRole(role) {
+function getDashboardPathForRole(role: string): string {
   // Note: we do NOT have /dashboard (it 404s). Dashboards are role-specific.
   switch (role) {
     case 'admin':
@@ -55,7 +80,7 @@ function getDashboardPathForRole(role) {
   }
 }
 
-function toAbsoluteUrl(siteUrl, urlOrPath) {
+function toAbsoluteUrl(siteUrl: string, urlOrPath: string | undefined): string {
   if (!urlOrPath) return siteUrl;
   if (typeof urlOrPath !== 'string') return siteUrl;
   if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) return urlOrPath;
@@ -66,7 +91,11 @@ function toAbsoluteUrl(siteUrl, urlOrPath) {
 /**
  * Send email verification email
  */
-export async function sendVerificationEmail(email, token, fullName = '') {
+export async function sendVerificationEmail(
+  email: string,
+  token: string,
+  fullName = ''
+): Promise<{ success: boolean; error?: string; messageId?: string }> {
   const RESEND_API_KEY = getResendApiKey();
   if (!RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not configured. Email verification email not sent.');
@@ -307,14 +336,18 @@ AgroTalent Hub Team
     return { success: true, messageId: data.id };
   } catch (error) {
     console.error('Error sending verification email:', error);
-    return { success: false, error: error.message || 'Failed to send email' };
+    return { success: false, error: errorMessage(error) || 'Failed to send email' };
   }
 }
 
 /**
  * Send password reset email
  */
-export async function sendPasswordResetEmail(email, resetLink, fullName = '') {
+export async function sendPasswordResetEmail(
+  email: string,
+  resetLink: string,
+  fullName = ''
+): Promise<{ success: boolean; error?: string; messageId?: string }> {
   const RESEND_API_KEY = getResendApiKey();
   if (!RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not configured. Password reset email not sent.');
@@ -497,7 +530,7 @@ export async function sendPasswordResetEmail(email, resetLink, fullName = '') {
     return { success: true, messageId: data.id };
   } catch (error) {
     console.error('Error sending password reset email:', error);
-    return { success: false, error: error.message || 'Failed to send email' };
+    return { success: false, error: errorMessage(error) || 'Failed to send email' };
   }
 }
 
@@ -505,12 +538,12 @@ export async function sendPasswordResetEmail(email, resetLink, fullName = '') {
  * Send general notification email (for profile verification, etc.)
  */
 export async function sendNotificationEmail(
-  email,
-  subject,
-  message,
+  email: string,
+  subject: string,
+  message: string,
   fullName = '',
-  options = {}
-) {
+  options: NotificationEmailOptions = {}
+): Promise<{ success: boolean; error?: string; messageId?: string }> {
   const RESEND_API_KEY = getResendApiKey();
   if (!RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not configured. Notification email not sent.');
@@ -518,10 +551,10 @@ export async function sendNotificationEmail(
   }
 
   const SITE_URL = getSiteUrl();
-  const ctaText = options?.ctaText || 'Open Dashboard';
+  const ctaText = options.ctaText || 'Open Dashboard';
   const ctaUrl = toAbsoluteUrl(
     SITE_URL,
-    options?.ctaUrl || getDashboardPathForRole(options?.role)
+    options.ctaUrl || getDashboardPathForRole(options.role ?? '')
   );
   const emailHtml = `
 <!DOCTYPE html>
@@ -686,6 +719,302 @@ AgroTalent Hub Team
     return { success: true, messageId: data.id };
   } catch (error) {
     console.error('Error sending notification email:', error);
-    return { success: false, error: error.message || 'Failed to send email' };
+    return { success: false, error: errorMessage(error) || 'Failed to send email' };
+  }
+}
+
+export async function sendWelcomeEmail(
+  userEmail: string,
+  userName: string,
+  role: string
+): Promise<void> {
+  try {
+    const key = getResendApiKey();
+    if (!key) {
+      console.error('RESEND_API_KEY not configured');
+      return;
+    }
+    const resend = new Resend(key);
+    const safeName = escapeEmailHtml(userName);
+    const base = getFrontendBaseUrl();
+    const dashboardUrl = `${base}/dashboard`;
+    let bodyText =
+      'Welcome to AgroTalent Hub.';
+    if (role === 'farm') {
+      bodyText =
+        'Your farm account is now active. Post your first job and start finding verified agricultural talent across Ghana.';
+    } else if (role === 'graduate' || role === 'student' || role === 'skilled') {
+      bodyText =
+        'Your profile is now active. Browse available jobs and apply to roles matched to your region and qualifications.';
+    }
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Welcome</title></head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;">
+    <tr>
+      <td align="center" style="padding:24px 16px;">
+        <table role="presentation" width="100%" style="max-width:560px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <tr>
+            <td style="background:#1A6B3C;padding:20px 24px;">
+              <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">AgroTalent Hub</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;">
+              <h1 style="margin:0 0 16px;font-size:20px;color:#0D3320;">Hi ${safeName},</h1>
+              <p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#374151;">${escapeEmailHtml(bodyText)}</p>
+              <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                <td style="border-radius:8px;background:#1A6B3C;">
+                  <a href="${escapeEmailHtml(dashboardUrl)}" style="display:inline-block;padding:14px 24px;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">Open dashboard</a>
+                </td>
+              </tr></table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px 24px;">
+              <p style="margin:0;font-size:12px;color:#6b7280;">AgroTalent Hub | Accra, Ghana</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: userEmail,
+      subject: 'Welcome to AgroTalent Hub',
+      html,
+    });
+  } catch (error) {
+    console.error('sendWelcomeEmail error:', error);
+  }
+}
+
+export async function sendApplicationReceivedEmail(
+  farmEmail: string,
+  farmName: string,
+  applicantName: string,
+  jobTitle: string
+): Promise<void> {
+  try {
+    const key = getResendApiKey();
+    if (!key) {
+      console.error('RESEND_API_KEY not configured');
+      return;
+    }
+    const resend = new Resend(key);
+    const base = getFrontendBaseUrl();
+    const appsUrl = `${base}/dashboard/farm/applications`;
+    const safeFarm = escapeEmailHtml(farmName);
+    const safeApplicant = escapeEmailHtml(applicantName);
+    const safeJob = escapeEmailHtml(jobTitle);
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>New application</title></head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px 16px;">
+        <table role="presentation" width="100%" style="max-width:560px;border:1px solid #e5e7eb;border-radius:8px;">
+          <tr>
+            <td style="background:#1A6B3C;padding:20px 24px;">
+              <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">AgroTalent Hub</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;">
+              <h1 style="margin:0 0 12px;font-size:18px;color:#0D3320;">New application received</h1>
+              <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">
+                ${safeApplicant} has applied for <strong>${safeJob}</strong> (${safeFarm}).
+              </p>
+              <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                <td style="border-radius:8px;background:#1A6B3C;">
+                  <a href="${escapeEmailHtml(appsUrl)}" style="display:inline-block;padding:14px 24px;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">View applications</a>
+                </td>
+              </tr></table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <p style="margin:0;font-size:12px;color:#6b7280;">AgroTalent Hub | Accra, Ghana</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: farmEmail,
+      subject: 'New Application Received - ' + jobTitle,
+      html,
+    });
+  } catch (error) {
+    console.error('sendApplicationReceivedEmail error:', error);
+  }
+}
+
+export async function sendApplicationStatusEmail(
+  applicantEmail: string,
+  applicantName: string,
+  jobTitle: string,
+  status: string,
+  reviewNotes?: string
+): Promise<void> {
+  try {
+    const key = getResendApiKey();
+    if (!key) {
+      console.error('RESEND_API_KEY not configured');
+      return;
+    }
+    const resend = new Resend(key);
+    const base = getFrontendBaseUrl();
+    const appsUrl = `${base}/dashboard/graduate/applications`;
+    const safeName = escapeEmailHtml(applicantName);
+    const safeJob = escapeEmailHtml(jobTitle);
+    const s = String(status).toLowerCase();
+    let statusMessage = 'Your application status has been updated to: ' + status;
+    if (s === 'reviewed') {
+      statusMessage = 'Your application has been reviewed by the farm.';
+    } else if (s === 'shortlisted') {
+      statusMessage = 'Congratulations! You have been shortlisted for this role.';
+    } else if (s === 'accepted') {
+      statusMessage = 'Great news! Your application has been accepted.';
+    } else if (s === 'rejected') {
+      statusMessage =
+        'Thank you for applying. Unfortunately your application was not successful this time.';
+    }
+    const notesBlock =
+      reviewNotes != null && String(reviewNotes).trim() !== ''
+        ? `<div style="margin:20px 0;padding:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
+             <p style="margin:0 0 8px;font-size:12px;font-weight:bold;color:#374151;">Feedback from farm:</p>
+             <p style="margin:0;font-size:14px;color:#4b5563;white-space:pre-wrap;">${escapeEmailHtml(reviewNotes)}</p>
+           </div>`
+        : '';
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Application update</title></head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px 16px;">
+        <table role="presentation" width="100%" style="max-width:560px;border:1px solid #e5e7eb;border-radius:8px;">
+          <tr>
+            <td style="background:#1A6B3C;padding:20px 24px;">
+              <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">AgroTalent Hub</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;">
+              <h1 style="margin:0 0 12px;font-size:18px;color:#0D3320;">Hi ${safeName},</h1>
+              <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">${escapeEmailHtml(statusMessage)}</p>
+              ${notesBlock}
+              <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                <td style="border-radius:8px;background:#1A6B3C;">
+                  <a href="${escapeEmailHtml(appsUrl)}" style="display:inline-block;padding:14px 24px;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">View applications</a>
+                </td>
+              </tr></table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <p style="margin:0;font-size:12px;color:#6b7280;">AgroTalent Hub | Accra, Ghana</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: applicantEmail,
+      subject: 'Application Update - ' + jobTitle,
+      html,
+    });
+  } catch (error) {
+    console.error('sendApplicationStatusEmail error:', error);
+  }
+}
+
+export async function sendPlacementConfirmedEmail(
+  graduateEmail: string,
+  graduateName: string,
+  jobTitle: string,
+  farmName: string,
+  startDate?: string
+): Promise<void> {
+  try {
+    const key = getResendApiKey();
+    if (!key) {
+      console.error('RESEND_API_KEY not configured');
+      return;
+    }
+    const resend = new Resend(key);
+    const base = getFrontendBaseUrl();
+    const placementsUrl = `${base}/dashboard/graduate/placements`;
+    const safeGrad = escapeEmailHtml(graduateName);
+    const safeJob = escapeEmailHtml(jobTitle);
+    const safeFarm = escapeEmailHtml(farmName);
+    const startLine =
+      startDate != null && String(startDate).trim() !== ''
+        ? `<p style="margin:0 0 16px;font-size:15px;color:#374151;"><strong>Start date:</strong> ${escapeEmailHtml(startDate)}</p>`
+        : '';
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Placement confirmed</title></head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px 16px;">
+        <table role="presentation" width="100%" style="max-width:560px;border:1px solid #e5e7eb;border-radius:8px;">
+          <tr>
+            <td style="background:#1A6B3C;padding:20px 24px;">
+              <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">AgroTalent Hub</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;">
+              <h1 style="margin:0 0 12px;font-size:18px;color:#0D3320;">Congratulations, ${safeGrad}!</h1>
+              <p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:#374151;">
+                Your placement for <strong>${safeJob}</strong> with <strong>${safeFarm}</strong> is confirmed.
+              </p>
+              ${startLine}
+              <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                <td style="border-radius:8px;background:#1A6B3C;">
+                  <a href="${escapeEmailHtml(placementsUrl)}" style="display:inline-block;padding:14px 24px;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;">View placements</a>
+                </td>
+              </tr></table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <p style="margin:0;font-size:12px;color:#6b7280;">AgroTalent Hub | Accra, Ghana</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: graduateEmail,
+      subject: 'Placement Confirmed - ' + jobTitle,
+      html,
+    });
+  } catch (error) {
+    console.error('sendPlacementConfirmedEmail error:', error);
   }
 }

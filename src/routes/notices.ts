@@ -1,12 +1,13 @@
 import express from 'express';
 import { authenticate } from '../middleware/auth.js';
+import type { AuthRequest } from '../types/auth.js';
+import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
 
-// GET /api/notices/:id - Single notice (RLS: user can only see if audience matches their role)
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const supabase = req.supabase;
+    const supabase = (req as AuthRequest).supabase;
     const { data, error } = await supabase
       .from('notices')
       .select('id, title, body_html, link, audience, attachments, created_at')
@@ -19,7 +20,7 @@ router.get('/:id', authenticate, async (req, res) => {
     }
     return res.json(data);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 

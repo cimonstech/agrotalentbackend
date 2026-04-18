@@ -1,7 +1,10 @@
 import express from 'express';
 import { getSupabaseClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
-
+import type { AuthRequest } from '../types/auth.js';
+import { errorMessage } from '../lib/errors.js'
+import { validate } from '../lib/validate.js'
+import { updateProfileSchema } from '../lib/schemas.js'
 const router = express.Router();
 
 // GET /api/profile
@@ -15,7 +18,7 @@ router.get('/', authenticate, async (req, res) => {
     let { data: profile, error } = await supabaseAdmin
       .from('profiles')
       .select('*')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .maybeSingle(); // Use maybeSingle() instead of single() to handle no rows gracefully
     
     // If no profile found, create a basic profile from user metadata
@@ -23,17 +26,17 @@ router.get('/', authenticate, async (req, res) => {
       // Check if it's the "no rows" error or profile is null
       if (error?.code === 'PGRST116' || !profile) {
         // Profile doesn't exist - create a basic one from user metadata
-        console.log('Profile not found, creating basic profile for user:', req.user.id);
-        console.log('User metadata:', JSON.stringify(req.user.user_metadata, null, 2));
+        console.log('Profile not found, creating basic profile for user:', (req as AuthRequest).user.id);
+        console.log('User metadata:', JSON.stringify((req as AuthRequest).user.user_metadata, null, 2));
         
         // Get role from user metadata or default to 'graduate'
-        const role = req.user.user_metadata?.role || 'graduate';
+        const role = (req as AuthRequest).user.user_metadata?.role || 'graduate';
         
         // Build basic profile based on role to satisfy constraints
-        const basicProfile = {
-          id: req.user.id,
-          email: req.user.email || '',
-          full_name: req.user.user_metadata?.full_name || null,
+        const basicProfile: Record<string, unknown> = {
+          id: (req as AuthRequest).user.id,
+          email: (req as AuthRequest).user.email || '',
+          full_name: (req as AuthRequest).user.user_metadata?.full_name || null,
           phone: null,
           role: role,
           is_verified: false,
@@ -42,13 +45,13 @@ router.get('/', authenticate, async (req, res) => {
         // Add role-specific required fields to satisfy constraints
         if (role === 'farm') {
           // Farm role requires farm_name (from constraint)
-          basicProfile.farm_name = req.user.user_metadata?.farm_name || 'Farm Name Pending';
+          basicProfile.farm_name = (req as AuthRequest).user.user_metadata?.farm_name || 'Farm Name Pending';
           basicProfile.farm_type = null;
           basicProfile.farm_location = null;
           basicProfile.farm_address = null;
         } else if (role === 'graduate' || role === 'student') {
           // Graduate/Student role requires institution_name (from constraint)
-          basicProfile.institution_name = req.user.user_metadata?.institution_name || 'Institution Name Pending';
+          basicProfile.institution_name = (req as AuthRequest).user.user_metadata?.institution_name || 'Institution Name Pending';
           basicProfile.institution_type = null;
           basicProfile.qualification = null;
           basicProfile.specialization = null;
@@ -73,22 +76,22 @@ router.get('/', authenticate, async (req, res) => {
             code: createError.code,
             details: createError.details,
             hint: createError.hint,
-            user_id: req.user.id,
-            email: req.user.email,
+            user_id: (req as AuthRequest).user.id,
+            email: (req as AuthRequest).user.email,
             role: role
           });
           
           // Try to get more details about the error
-          let errorMessage = 'Profile not found and could not be created automatically.';
+          let userMsg = 'Profile not found and could not be created automatically.';
           if (createError.message) {
-            errorMessage += ` ${createError.message}`;
+            userMsg += ` ${createError.message}`;
           }
           if (createError.details) {
-            errorMessage += ` Details: ${createError.details}`;
+            userMsg += ` Details: ${createError.details}`;
           }
           
           return res.status(500).json({ 
-            error: errorMessage,
+            error: userMsg,
             details: createError.message,
             code: createError.code,
             hint: createError.hint
@@ -114,10 +117,11 @@ router.get('/', authenticate, async (req, res) => {
       .split(',')
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
+    const authUser = (req as AuthRequest).user;
     const isAdmin =
       profile.role === 'admin' ||
-      (req.user.user_metadata && req.user.user_metadata.role === 'admin') ||
-      (req.user.email && adminEmails.includes(req.user.email.toLowerCase()));
+      authUser.user_metadata?.role === 'admin' ||
+      (!!authUser.email && adminEmails.includes(authUser.email.toLowerCase()));
     if (isAdmin) {
       profile = { ...profile, role: 'admin', is_verified: true };
     }
@@ -125,15 +129,16 @@ router.get('/', authenticate, async (req, res) => {
     return res.json({ profile });
   } catch (error) {
     console.error('Profile fetch error:', error);
+    const err = error as { code?: string };
     return res.status(500).json({ 
-      error: error.message || 'Failed to fetch profile',
-      details: error.code || 'Unknown error'
+      error: errorMessage(error) || 'Failed to fetch profile',
+      details: err.code || 'Unknown error'
     });
   }
 });
 
 // PATCH /api/profile
-router.patch('/', authenticate, async (req, res) => {
+router.patch('/', authenticate, validate(updateProfileSchema), async (req, res) => {
   try {
     const { getSupabaseAdminClient } = await import('../lib/supabase.js');
     const supabaseAdmin = getSupabaseAdminClient();
@@ -158,7 +163,7 @@ router.patch('/', authenticate, async (req, res) => {
     const { data: currentProfile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .maybeSingle();
     
     if (profileError && profileError.code !== 'PGRST116') {
@@ -169,8 +174,7 @@ router.patch('/', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Profile not found. Please complete your profile setup first.' });
     }
     
-    // Build update object based on role
-    const updateData = {};
+    const updateData: Record<string, unknown> = {};
     
     // Common fields
     if (full_name !== undefined) updateData.full_name = full_name;
@@ -201,7 +205,7 @@ router.patch('/', authenticate, async (req, res) => {
     const { data: profile, error } = await supabaseAdmin
       .from('profiles')
       .update(updateData)
-      .eq('id', req.user.id)
+      .eq('id', (req as AuthRequest).user.id)
       .select()
       .maybeSingle();
     
@@ -213,7 +217,7 @@ router.patch('/', authenticate, async (req, res) => {
     
     return res.json({ profile });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
@@ -226,7 +230,7 @@ router.post('/upload-document', authenticate, async (req, res, next) => {
     uploadSingle('file')(req, res, next);
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to process upload'
+      error: errorMessage(error) || 'Failed to process upload'
     });
   }
 }, async (req, res) => {
@@ -246,7 +250,7 @@ router.post('/upload-document', authenticate, async (req, res, next) => {
 
     // Generate unique filename
     const fileExt = req.file.originalname.split('.').pop();
-    const fileName = `${req.user.id}/${documentType}_${Date.now()}.${fileExt}`;
+    const fileName = `${(req as AuthRequest).user.id}/${documentType}_${Date.now()}.${fileExt}`;
 
     // Upload to R2
     const publicUrl = await uploadToR2(
@@ -261,7 +265,7 @@ router.post('/upload-document', authenticate, async (req, res, next) => {
       const { error: updateError } = await supabase
       .from('profiles')
       .update({ [fieldName]: publicUrl })
-      .eq('id', req.user.id);
+      .eq('id', (req as AuthRequest).user.id);
 
     if (updateError) throw updateError;
 
@@ -271,7 +275,7 @@ router.post('/upload-document', authenticate, async (req, res, next) => {
     });
   } catch (error) {
     return res.status(500).json({
-      error: error.message || 'Failed to upload document'
+      error: errorMessage(error) || 'Failed to upload document'
     });
   }
 });
