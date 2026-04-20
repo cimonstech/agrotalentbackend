@@ -140,7 +140,7 @@ export class MatchingService {
       .from('profiles')
       .select('*')
       .eq('is_verified', true)
-      .in('role', ['graduate', 'student', 'worker']);
+      .in('role', ['graduate', 'student', 'skilled']);
 
     if (job.location) {
       query = query.eq('preferred_region', job.location);
