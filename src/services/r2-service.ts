@@ -90,9 +90,3 @@ export async function getPresignedUrl(fileName: string, expiresIn = 3600): Promi
     throw new Error(`Failed to generate presigned URL: ${errorMessage(error)}`);
   }
 }
-
-}
-
-}
-
-}
