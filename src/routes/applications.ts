@@ -11,6 +11,7 @@ import {
 } from '../lib/schemas.js'
 import { calculateMatchScore } from '../services/matching-service.js';
 import { sendApplicationReceivedEmail, sendApplicationStatusEmail } from '../services/email-service.js';
+import { sendApplicationReceivedSms, sendApplicationStatusSms } from '../services/sms-service.js';
 import { schedulePlacementConfirmedEmail } from './placements.js';
 
 const router = express.Router();
@@ -392,7 +393,7 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
       const admin = getSupabaseAdminClient();
       const { data: farm } = await admin
         .from('profiles')
-        .select('email, farm_name, full_name')
+        .select('email, phone, farm_name, full_name')
         .eq('id', jobFull.farm_id)
         .single();
       const applicantName =
@@ -404,6 +405,14 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
           applicantName,
           String(jobFull.title)
         );
+      }
+      if (farm?.phone) {
+        void sendApplicationReceivedSms(
+          farm.phone,
+          farm.farm_name ?? farm.full_name ?? 'Farm',
+          applicantName,
+          String(jobFull.title)
+        ).catch(console.error)
       }
     })().catch(console.error);
 
@@ -614,7 +623,7 @@ router.patch(
         const admin = getSupabaseAdminClient();
         const { data: applicantProfile } = await admin
           .from('profiles')
-          .select('email, full_name')
+          .select('email, phone, full_name')
           .eq('id', application.applicant_id)
           .single();
         const { data: jobRow } = await admin
@@ -630,6 +639,14 @@ router.patch(
             status,
             typeof review_notes === 'string' ? review_notes : undefined
           );
+        }
+        if (applicantProfile?.phone && jobRow?.title) {
+          void sendApplicationStatusSms(
+            applicantProfile.phone,
+            applicantProfile.full_name ?? 'Applicant',
+            jobRow.title,
+            status
+          ).catch(console.error)
         }
       })().catch(console.error);
     }

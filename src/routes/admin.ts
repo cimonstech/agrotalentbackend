@@ -4,7 +4,13 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { uploadSingleImage } from '../middleware/upload.js';
-import { sendNotificationEmail } from '../services/email-service.js';
+import {
+  sendDocumentReviewedEmail,
+  sendNoticePostedEmail,
+  sendNotificationEmail,
+  sendTrainingScheduledEmail
+} from '../services/email-service.js';
+import { sendDocumentReviewedSms, sendTrainingScheduledSms } from '../services/sms-service.js';
 import type { AdminAuthRequest } from '../types/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
@@ -313,13 +319,13 @@ router.post('/notices/upload-image', requireAdmin, (req, res, next) => {
   });
 }, async (req, res) => {
   try {
-    if (!req.file || !req.file.buffer) {
+    if (!req.file || !req.file.path) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    const { uploadToR2 } = await import('../services/r2-service.js');
+    const { generateR2Key, uploadToR2 } = await import('../services/r2-service.js');
     const safeName = (req.file.originalname || 'image').replace(/[^a-zA-Z0-9.-]/g, '_');
-    const key = `notices/${crypto.randomUUID()}_${safeName}`;
-    const publicUrl = await uploadToR2(req.file.buffer, key, req.file.mimetype);
+    const key = generateR2Key('notices', safeName);
+    const publicUrl = await uploadToR2(key, req.file.path, req.file.mimetype);
     return res.status(201).json({ url: publicUrl, file_name: req.file.originalname || 'image' });
   } catch (error) {
     console.error('Notice image upload error:', error);
@@ -398,6 +404,21 @@ router.post('/notices', requireAdmin, validate(createNoticeSchema), async (req, 
       created_by: (req as AdminAuthRequest).user.id,
       attachments: attachmentsList
     });
+
+    const noticeEmailTargets = targetProfiles.slice(0, 100)
+    const frontendBase = String(process.env.FRONTEND_URL ?? '').replace(/\/+$/, '')
+    for (const p of noticeEmailTargets) {
+      if (!p.email) continue
+      const roleSegment = p.role === 'skilled' ? 'skilled' : p.role === 'student' ? 'student' : p.role === 'farm' ? 'farm' : 'graduate'
+      const noticeHref = `${frontendBase}/dashboard/${roleSegment}/notices/${notice.id}`
+      void sendNoticePostedEmail(
+        p.email,
+        p.full_name || 'User',
+        notice.title,
+        notice.audience,
+        noticeHref
+      ).catch(console.error)
+    }
 
     // Send notice by email to the same audience (merge auth emails like communications)
     let emailSent = 0;
@@ -615,6 +636,44 @@ router.post('/trainings', requireAdmin, validate(createTrainingSchema), async (r
       .single();
 
     if (error) throw error;
+
+    const { data: participants } = await supabase
+      .from('training_participants')
+      .select('participant_id')
+      .eq('session_id', session.id)
+
+    for (const row of participants || []) {
+      const { data: participantProfile } = await supabase
+        .from('profiles')
+        .select('email, phone, full_name')
+        .eq('id', row.participant_id)
+        .maybeSingle()
+
+      if (!participantProfile?.email) continue
+      void sendTrainingScheduledEmail(
+        participantProfile.email,
+        participantProfile.full_name ?? 'Participant',
+        session.title,
+        session.scheduled_at,
+        session.zoom_link,
+        session.trainer_name
+      ).catch(console.error)
+      if (participantProfile.phone) {
+        void sendTrainingScheduledSms(
+          participantProfile.phone,
+          participantProfile.full_name ?? 'Participant',
+          session.title,
+          new Date(session.scheduled_at).toLocaleDateString('en-GH', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        ).catch(console.error)
+      }
+    }
 
     // Create a notice so it appears in user notifications; link is left unset so each notification gets /dashboard/{role}/notices/{id}
     try {
@@ -1102,6 +1161,31 @@ router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
       .single();
 
     if (error) throw error;
+    if (document?.user_id) {
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('email, phone, full_name')
+        .eq('id', document.user_id)
+        .maybeSingle()
+      if (profile?.email) {
+        void sendDocumentReviewedEmail(
+          profile.email,
+          profile.full_name ?? 'User',
+          document.document_type,
+          document.file_name,
+          'approved',
+          null
+        ).catch(console.error)
+      }
+      if (profile?.phone) {
+        void sendDocumentReviewedSms(
+          profile.phone,
+          profile.full_name ?? 'User',
+          document.document_type,
+          'approved'
+        ).catch(console.error)
+      }
+    }
     return res.json({ document });
   } catch (error) {
     console.error('Admin document approve error:', error);
@@ -1127,6 +1211,31 @@ router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
       .single();
 
     if (error) throw error;
+    if (document?.user_id) {
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('email, phone, full_name')
+        .eq('id', document.user_id)
+        .maybeSingle()
+      if (profile?.email) {
+        void sendDocumentReviewedEmail(
+          profile.email,
+          profile.full_name ?? 'User',
+          document.document_type,
+          document.file_name,
+          'rejected',
+          reason || null
+        ).catch(console.error)
+      }
+      if (profile?.phone) {
+        void sendDocumentReviewedSms(
+          profile.phone,
+          profile.full_name ?? 'User',
+          document.document_type,
+          'rejected'
+        ).catch(console.error)
+      }
+    }
     return res.json({ document });
   } catch (error) {
     console.error('Admin document reject error:', error);

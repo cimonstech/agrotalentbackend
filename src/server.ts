@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors'
 import compression from 'compression'
 import dotenv from 'dotenv'
+import { doubleCsrf } from 'csrf-csrf'
 import authRoutes from './routes/auth.js'
 import profileRoutes from './routes/profile.js'
 import documentsRoutes from './routes/documents.js'
@@ -49,7 +50,7 @@ app.use(
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-csrf-token'],
   })
 )
 
@@ -63,6 +64,37 @@ app.post(
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
+
+const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
+  getSecret: () => process.env.CSRF_SECRET ?? 'agrotalent-csrf-secret-change-in-production',
+  getSessionIdentifier: (req: Request) =>
+    String(req.headers.authorization ?? req.ip ?? 'anonymous'),
+  cookieName: 'x-csrf-token',
+  cookieOptions: {
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    httpOnly: true,
+  },
+  size: 64,
+  getCsrfTokenFromRequest: (req: Request) => req.headers['x-csrf-token'] as string,
+})
+
+app.get('/api/csrf-token', (req, res) => {
+  res.json({ token: generateCsrfToken(req, res) })
+})
+
+app.use('/api/auth', doubleCsrfProtection)
+app.use('/api/applications', doubleCsrfProtection)
+app.use('/api/jobs', doubleCsrfProtection)
+app.use('/api/placements', doubleCsrfProtection)
+app.use('/api/payments', doubleCsrfProtection)
+app.use('/api/messages', doubleCsrfProtection)
+app.use('/api/profile', doubleCsrfProtection)
+app.use('/api/admin', doubleCsrfProtection)
+app.use('/api/documents', doubleCsrfProtection)
+app.use('/api/training', doubleCsrfProtection)
+app.use('/api/notices', doubleCsrfProtection)
+app.use('/api/contact', doubleCsrfProtection)
 
 // Auth routes: strict
 app.use('/api/auth', authLimiter)
@@ -164,6 +196,10 @@ const REQUIRED_ENV = [
   'R2_SECRET_ACCESS_KEY',
   'R2_BUCKET_NAME',
   'R2_PUBLIC_URL',
+  'CSRF_SECRET',
+  'FISH_AFRICA_APP_ID',
+  'FISH_AFRICA_APP_SECRET',
+  'FISH_AFRICA_SENDER_ID',
 ]
 
 const missingEnv = REQUIRED_ENV.filter((key) => !process.env[key])

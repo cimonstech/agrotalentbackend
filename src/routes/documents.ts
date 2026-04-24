@@ -54,7 +54,7 @@ router.post('/', authenticate, async (req, res, next) => {
       return res.status(400).json({ error: 'No file provided' });
     }
 
-    const { uploadToR2 } = await import('../services/r2-service.js');
+    const { generateR2Key, uploadToR2 } = await import('../services/r2-service.js');
     const { document_type, description } = req.body;
     
     if (!['certificate', 'transcript', 'cv', 'nss_letter'].includes(document_type)) {
@@ -64,13 +64,12 @@ router.post('/', authenticate, async (req, res, next) => {
     }
 
     // Generate unique filename
-    const fileExt = req.file.originalname.split('.').pop();
-    const fileName = `${(req as AuthRequest).user.id}/documents/${document_type}_${Date.now()}.${fileExt}`;
+    const fileName = generateR2Key(`${(req as AuthRequest).user.id}/documents`, req.file.originalname);
 
     // Upload to R2
     const publicUrl = await uploadToR2(
-      req.file.buffer,
       fileName,
+      req.file.path,
       req.file.mimetype
     );
 

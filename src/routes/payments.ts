@@ -7,12 +7,49 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import type { AuthRequest } from '../types/auth.js'
 import { validate } from '../lib/validate.js'
 import { initiatePaymentSchema, verifyPaymentSchema } from '../lib/schemas.js'
+import { sendPaymentConfirmedEmail } from '../services/email-service.js'
+import { sendPaymentConfirmedSms } from '../services/sms-service.js'
 
 const router = Router()
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY ?? ''
 const PLACEMENT_FEE_PESEWAS = 20000
 
 const supabase = () => getSupabaseAdminClient()
+
+async function triggerPaymentConfirmedEmail(payment: any): Promise<void> {
+  if (!payment?.placement_id) return
+  const db = supabase()
+  const { data: placement } = await db
+    .from('placements')
+    .select('job_id, farm_id, graduate_id')
+    .eq('id', payment.placement_id)
+    .maybeSingle()
+  if (!placement) return
+  const [{ data: job }, { data: farm }, { data: graduate }] = await Promise.all([
+    db.from('jobs').select('title').eq('id', placement.job_id).maybeSingle(),
+    db.from('profiles').select('email, phone, farm_name, full_name').eq('id', placement.farm_id).maybeSingle(),
+    db.from('profiles').select('full_name').eq('id', placement.graduate_id).maybeSingle()
+  ])
+  if (!farm?.email) return
+  void sendPaymentConfirmedEmail(
+    farm.email,
+    farm.farm_name ?? farm.full_name ?? 'Farm',
+    Number(payment.amount ?? 0),
+    payment.currency ?? 'GHS',
+    job?.title ?? 'Placement',
+    graduate?.full_name ?? 'Graduate',
+    payment.paystack_reference ?? payment.payment_reference ?? 'N/A'
+  ).catch(console.error)
+  if (farm?.phone) {
+    void sendPaymentConfirmedSms(
+      farm.phone,
+      farm.farm_name ?? farm.full_name ?? 'Farm',
+      Number(payment.amount ?? 0),
+      payment.currency ?? 'GHS',
+      job?.title ?? 'Placement'
+    ).catch(console.error)
+  }
+}
 
 router.post(
   '/initiate',
@@ -38,15 +75,21 @@ router.post(
       return res.status(403).json({ error: 'Not your placement' });
     }
 
-    const { data: existingPaid } = await supabase()
+    const { data: existingPayment } = await supabase()
       .from('payments')
       .select('id, status')
       .eq('placement_id', placementId)
-      .eq('status', 'paid')
+      .in('status', ['pending', 'paid'])
       .maybeSingle();
 
-    if (existingPaid) {
-      return res.status(409).json({ error: 'Already paid' });
+    if (existingPayment?.status === 'paid') {
+      return res.status(409).json({ success: false, error: 'Placement fee already paid' });
+    }
+    if (existingPayment?.status === 'pending') {
+      return res.status(200).json({
+        success: true,
+        data: { message: 'Payment already initiated', payment_id: existingPayment.id }
+      });
     }
 
     const reference = 'ATH-' + uuidv4();
@@ -161,6 +204,8 @@ router.post('/verify', requireAuth, validate(verifyPaymentSchema), async (req, r
       })
       .eq('id', payment.placement_id);
 
+    await triggerPaymentConfirmedEmail(payment)
+
     return res.json({ success: true, data: payment });
   } catch (error) {
     console.error('[POST /payments/verify]', error);
@@ -218,6 +263,7 @@ export async function paymentsWebhookHandler(req: Request, res: Response): Promi
             recruitment_fee_paid_at: paidAt,
           })
           .eq('id', payment.placement_id);
+        await triggerPaymentConfirmedEmail(payment)
       }
     }
 

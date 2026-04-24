@@ -5,6 +5,7 @@ import type { AuthRequest } from '../types/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js';
 import { sendPlacementConfirmedEmail } from '../services/email-service.js';
+import { sendPlacementConfirmedSms } from '../services/sms-service.js';
 
 const router = express.Router();
 
@@ -120,7 +121,7 @@ export function schedulePlacementConfirmedEmail(placement: {
     const [{ data: graduate }, { data: farm }, { data: jobRow }] = await Promise.all([
       admin
         .from('profiles')
-        .select('email, full_name')
+        .select('email, phone, full_name')
         .eq('id', placement.graduate_id)
         .single(),
       admin
@@ -138,6 +139,14 @@ export function schedulePlacementConfirmedEmail(placement: {
       farm?.farm_name ?? farm?.full_name ?? 'Farm',
       placement.start_date ?? undefined
     );
+    if (graduate?.phone) {
+      void sendPlacementConfirmedSms(
+        graduate.phone,
+        graduate.full_name ?? 'Graduate',
+        jobRow.title,
+        farm?.farm_name ?? farm?.full_name ?? 'Farm'
+      ).catch(console.error)
+    }
   })().catch(console.error);
 }
 

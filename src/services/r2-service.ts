@@ -1,6 +1,10 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { errorMessage } from '../lib/errors.js';
+import { createReadStream, unlinkSync } from 'fs';
+import { stat } from 'fs/promises';
+import path from 'path';
+import crypto from 'crypto';
 
 const BUCKET_NAME = process.env.R2_BUCKET_NAME || 'agrotalent-documents';
 
@@ -27,38 +31,62 @@ function getR2Client(): S3Client {
 }
 
 export async function uploadToR2(
-  fileBuffer: Buffer,
-  fileName: string,
+  key: string,
+  source: Buffer | string,
   contentType: string
 ): Promise<string> {
   try {
     const client = getR2Client();
+    const body = typeof source === 'string' ? createReadStream(source) : source;
+    if (typeof source === 'string') {
+      await stat(source);
+    }
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
-      Key: fileName,
-      Body: fileBuffer,
+      Key: key,
+      Body: body,
       ContentType: contentType,
     });
 
     await client.send(command);
+    if (typeof source === 'string') {
+      try {
+        unlinkSync(source);
+      } catch (cleanupErr) {
+        console.warn('Failed to cleanup temp upload file:', cleanupErr);
+      }
+    }
 
     if (process.env.R2_PUBLIC_URL) {
       const publicUrl = process.env.R2_PUBLIC_URL.startsWith('http')
         ? process.env.R2_PUBLIC_URL
         : `https://${process.env.R2_PUBLIC_URL}`;
-      return `${publicUrl}/${fileName}`;
+      return `${publicUrl}/${key}`;
     }
 
     const getCommand = new GetObjectCommand({
       Bucket: BUCKET_NAME,
-      Key: fileName,
+      Key: key,
     });
 
     return await getSignedUrl(client, getCommand, { expiresIn: 31536000 });
   } catch (error) {
+    if (typeof source === 'string') {
+      try {
+        unlinkSync(source);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
     console.error('R2 upload error:', error);
     throw new Error(`Failed to upload to R2: ${errorMessage(error)}`);
   }
+}
+
+export function generateR2Key(folder: string, originalFilename: string): string {
+  const ext = path.extname(originalFilename).toLowerCase();
+  const safeExt = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx'].includes(ext) ? ext : '.bin';
+  return folder + '/' + crypto.randomUUID() + safeExt;
 }
 
 export async function deleteFromR2(fileName: string): Promise<void> {

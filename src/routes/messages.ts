@@ -6,6 +6,7 @@ import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
 import { validate } from '../lib/validate.js'
 import { postMessageBodySchema } from '../lib/schemas.js'
+import { sendNewMessageEmail } from '../services/email-service.js'
 
 const router = express.Router();
 
@@ -169,6 +170,48 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
           message: `You have a new message from ${profile.role === 'farm' ? 'a farm' : 'a graduate'}`,
           link: `/dashboard/messages/${conversationId}`
         });
+    }
+
+    const { data: conversationForEmail } = await supabase
+      .from('conversations')
+      .select('farm_id, graduate_id')
+      .eq('id', conversationId)
+      .maybeSingle()
+
+    if (conversationForEmail) {
+      const recipientProfileId = conversationForEmail.farm_id === (req as AuthRequest).user.id
+        ? conversationForEmail.graduate_id
+        : conversationForEmail.farm_id
+      const { data: recipientProfile } = await supabase
+        .from('profiles')
+        .select('email, full_name, role')
+        .eq('id', recipientProfileId)
+        .maybeSingle()
+      const { data: senderProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', (req as AuthRequest).user.id)
+        .maybeSingle()
+
+      if (recipientProfile?.email) {
+        const frontendBase = String(process.env.FRONTEND_URL ?? '').replace(/\/+$/, '')
+        const recipientRole = String(recipientProfile.role ?? '')
+        const recipientRoleSegment = recipientRole === 'farm'
+          ? 'farm'
+          : recipientRole === 'skilled'
+            ? 'skilled'
+            : recipientRole === 'student'
+              ? 'student'
+              : 'graduate'
+        const conversationLink = `${frontendBase}/dashboard/${recipientRoleSegment}/messages`
+        void sendNewMessageEmail(
+          recipientProfile.email,
+          recipientProfile.full_name ?? 'User',
+          senderProfile?.full_name ?? 'Someone',
+          String(message.content ?? '').slice(0, 150),
+          conversationLink
+        ).catch(console.error)
+      }
     }
     
     return res.status(201).json({ message });

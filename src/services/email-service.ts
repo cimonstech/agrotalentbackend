@@ -88,6 +88,33 @@ function toAbsoluteUrl(siteUrl: string, urlOrPath: string | undefined): string {
   return `${siteUrl}${path}`;
 }
 
+async function logEmailSend(params: {
+  recipient_email: string
+  recipient_name?: string
+  subject: string
+  type: string
+  status: 'sent' | 'failed'
+  error_message?: string
+  metadata?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    const { getSupabaseAdminClient } = await import('../lib/supabase.js')
+    const supabase = getSupabaseAdminClient()
+    await supabase.from('email_logs').insert({
+      recipient_email: params.recipient_email,
+      recipient_name: params.recipient_name ?? null,
+      subject: params.subject,
+      type: params.type,
+      status: params.status,
+      error_message: params.error_message ?? null,
+      metadata: params.metadata ?? {},
+      sent_at: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.error('Failed to log email:', err)
+  }
+}
+
 /**
  * Send email verification email
  */
@@ -728,6 +755,7 @@ export async function sendWelcomeEmail(
   userName: string,
   role: string
 ): Promise<void> {
+  const subject = 'Welcome to AgroTalent Hub'
   try {
     const key = getResendApiKey();
     if (!key) {
@@ -786,10 +814,25 @@ export async function sendWelcomeEmail(
     await resend.emails.send({
       from: EMAIL_FROM_NOREPLY,
       to: userEmail,
-      subject: 'Welcome to AgroTalent Hub',
+      subject,
       html,
     });
+    await logEmailSend({
+      recipient_email: userEmail,
+      recipient_name: userName,
+      subject,
+      type: 'welcome',
+      status: 'sent',
+    })
   } catch (error) {
+    await logEmailSend({
+      recipient_email: userEmail,
+      recipient_name: userName,
+      subject,
+      type: 'welcome',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error',
+    })
     console.error('sendWelcomeEmail error:', error);
   }
 }
@@ -800,6 +843,7 @@ export async function sendApplicationReceivedEmail(
   applicantName: string,
   jobTitle: string
 ): Promise<void> {
+  const subject = 'New Application Received - ' + jobTitle
   try {
     const key = getResendApiKey();
     if (!key) {
@@ -853,10 +897,26 @@ export async function sendApplicationReceivedEmail(
     await resend.emails.send({
       from: EMAIL_FROM_NOREPLY,
       to: farmEmail,
-      subject: 'New Application Received - ' + jobTitle,
+      subject,
       html,
     });
+    await logEmailSend({
+      recipient_email: farmEmail,
+      recipient_name: farmName,
+      subject,
+      type: 'application_received',
+      status: 'sent',
+    })
   } catch (error) {
+    await logEmailSend({
+      recipient_email: farmEmail,
+      recipient_name: farmName,
+      subject,
+      type: 'application_received',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error',
+      metadata: { applicant_name: applicantName, job_title: jobTitle },
+    })
     console.error('sendApplicationReceivedEmail error:', error);
   }
 }
@@ -868,6 +928,7 @@ export async function sendApplicationStatusEmail(
   status: string,
   reviewNotes?: string
 ): Promise<void> {
+  const subject = 'Application Update - ' + jobTitle
   try {
     const key = getResendApiKey();
     if (!key) {
@@ -938,10 +999,27 @@ export async function sendApplicationStatusEmail(
     await resend.emails.send({
       from: EMAIL_FROM_NOREPLY,
       to: applicantEmail,
-      subject: 'Application Update - ' + jobTitle,
+      subject,
       html,
     });
+    await logEmailSend({
+      recipient_email: applicantEmail,
+      recipient_name: applicantName,
+      subject,
+      type: 'application_status',
+      status: 'sent',
+      metadata: { status },
+    })
   } catch (error) {
+    await logEmailSend({
+      recipient_email: applicantEmail,
+      recipient_name: applicantName,
+      subject,
+      type: 'application_status',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error',
+      metadata: { status },
+    })
     console.error('sendApplicationStatusEmail error:', error);
   }
 }
@@ -953,6 +1031,7 @@ export async function sendPlacementConfirmedEmail(
   farmName: string,
   startDate?: string
 ): Promise<void> {
+  const subject = 'Placement Confirmed - ' + jobTitle
   try {
     const key = getResendApiKey();
     if (!key) {
@@ -1011,10 +1090,387 @@ export async function sendPlacementConfirmedEmail(
     await resend.emails.send({
       from: EMAIL_FROM_NOREPLY,
       to: graduateEmail,
-      subject: 'Placement Confirmed - ' + jobTitle,
+      subject,
       html,
     });
+    await logEmailSend({
+      recipient_email: graduateEmail,
+      recipient_name: graduateName,
+      subject,
+      type: 'placement_confirmed',
+      status: 'sent',
+      metadata: { farm_name: farmName, start_date: startDate ?? null },
+    })
   } catch (error) {
+    await logEmailSend({
+      recipient_email: graduateEmail,
+      recipient_name: graduateName,
+      subject,
+      type: 'placement_confirmed',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error',
+      metadata: { farm_name: farmName, start_date: startDate ?? null },
+    })
     console.error('sendPlacementConfirmedEmail error:', error);
+  }
+}
+
+function formatScheduledAt(value: string): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function truncatePreview(value: string, max = 150): string {
+  if (value.length <= max) return value
+  return value.slice(0, max).trim() + '...'
+}
+
+export async function sendTrainingScheduledEmail(
+  participantEmail: string,
+  participantName: string,
+  sessionTitle: string,
+  scheduledAt: string,
+  zoomLink?: string | null,
+  trainerName?: string | null
+): Promise<void> {
+  const subject = 'Training Session Scheduled: ' + sessionTitle
+  const trainingUrl = `${getFrontendBaseUrl()}/dashboard/graduate/training`
+  const safeName = escapeEmailHtml(participantName)
+  const safeTitle = escapeEmailHtml(sessionTitle)
+  const safeTime = escapeEmailHtml(formatScheduledAt(scheduledAt))
+  const safeTrainer = trainerName ? escapeEmailHtml(trainerName) : ''
+  try {
+    const key = getResendApiKey()
+    if (!key) {
+      console.error('RESEND_API_KEY not configured')
+      return
+    }
+    const resend = new Resend(key)
+    const html = `
+<!DOCTYPE html>
+<html lang='en'>
+<body style='margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0'>
+    <tr><td align='center' style='padding:24px 16px;'>
+      <table role='presentation' width='100%' style='max-width:560px;border:1px solid #e5e7eb;border-radius:8px;'>
+        <tr><td style='background:#0D3320;padding:20px 24px;'><p style='margin:0;font-size:18px;font-weight:bold;color:#fff;'>AgroTalent Hub</p></td></tr>
+        <tr><td style='padding:28px 24px;'>
+          <h1 style='margin:0 0 12px;font-size:18px;color:#0D3320;'>Hi ${safeName},</h1>
+          <p style='margin:0 0 12px;font-size:15px;color:#374151;'>A training session has been scheduled for you.</p>
+          <p style='margin:0 0 8px;font-size:14px;color:#374151;'><strong>Session:</strong> ${safeTitle}</p>
+          <p style='margin:0 0 8px;font-size:14px;color:#374151;'><strong>Date and Time:</strong> ${safeTime}</p>
+          ${safeTrainer ? `<p style='margin:0 0 16px;font-size:14px;color:#374151;'><strong>Trainer:</strong> ${safeTrainer}</p>` : ''}
+          ${
+            zoomLink
+              ? `<table role='presentation' cellpadding='0' cellspacing='0' style='margin-bottom:12px;'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(zoomLink)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>Join Zoom Session</a></td></tr></table>`
+              : `<p style='margin:0 0 12px;font-size:14px;color:#6b7280;'>Location details will be shared closer to the date.</p>`
+          }
+          <table role='presentation' cellpadding='0' cellspacing='0'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(trainingUrl)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>View Training</a></td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: participantEmail,
+      subject,
+      html
+    })
+    await logEmailSend({
+      recipient_email: participantEmail,
+      recipient_name: participantName,
+      subject,
+      type: 'training_scheduled',
+      status: 'sent'
+    })
+  } catch (error) {
+    await logEmailSend({
+      recipient_email: participantEmail,
+      recipient_name: participantName,
+      subject,
+      type: 'training_scheduled',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error'
+    })
+    console.error('sendTrainingScheduledEmail error:', error)
+  }
+}
+
+export async function sendNoticePostedEmail(
+  recipientEmail: string,
+  recipientName: string,
+  noticeTitle: string,
+  noticeAudience: string,
+  noticeLink: string
+): Promise<void> {
+  const subject = 'New Notice: ' + noticeTitle
+  const safeName = escapeEmailHtml(recipientName)
+  const safeTitle = escapeEmailHtml(noticeTitle)
+  const safeAudience = escapeEmailHtml(noticeAudience)
+  try {
+    const key = getResendApiKey()
+    if (!key) {
+      console.error('RESEND_API_KEY not configured')
+      return
+    }
+    const resend = new Resend(key)
+    const html = `
+<!DOCTYPE html>
+<html lang='en'>
+<body style='margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0'>
+    <tr><td align='center' style='padding:24px 16px;'>
+      <table role='presentation' width='100%' style='max-width:560px;border:1px solid #e5e7eb;border-radius:8px;'>
+        <tr><td style='background:#0D3320;padding:20px 24px;'><p style='margin:0;font-size:18px;font-weight:bold;color:#fff;'>AgroTalent Hub</p></td></tr>
+        <tr><td style='padding:28px 24px;'>
+          <h1 style='margin:0 0 12px;font-size:18px;color:#0D3320;'>Hi ${safeName},</h1>
+          <p style='margin:0 0 12px;font-size:15px;color:#374151;'>A new notice has been posted for ${safeAudience} users.</p>
+          <p style='margin:0 0 18px;font-size:15px;color:#111827;'><strong>${safeTitle}</strong></p>
+          <table role='presentation' cellpadding='0' cellspacing='0'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(noticeLink)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>Read Notice</a></td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: recipientEmail,
+      subject,
+      html
+    })
+    await logEmailSend({
+      recipient_email: recipientEmail,
+      recipient_name: recipientName,
+      subject,
+      type: 'notice_posted',
+      status: 'sent'
+    })
+  } catch (error) {
+    await logEmailSend({
+      recipient_email: recipientEmail,
+      recipient_name: recipientName,
+      subject,
+      type: 'notice_posted',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error'
+    })
+    console.error('sendNoticePostedEmail error:', error)
+  }
+}
+
+export async function sendNewMessageEmail(
+  recipientEmail: string,
+  recipientName: string,
+  senderName: string,
+  messagePreview: string,
+  conversationLink: string
+): Promise<void> {
+  const subject = 'New message from ' + senderName
+  const safeName = escapeEmailHtml(recipientName)
+  const safeSender = escapeEmailHtml(senderName)
+  const safePreview = escapeEmailHtml(truncatePreview(messagePreview, 150))
+  try {
+    const key = getResendApiKey()
+    if (!key) {
+      console.error('RESEND_API_KEY not configured')
+      return
+    }
+    const resend = new Resend(key)
+    const html = `
+<!DOCTYPE html>
+<html lang='en'>
+<body style='margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0'>
+    <tr><td align='center' style='padding:24px 16px;'>
+      <table role='presentation' width='100%' style='max-width:560px;border:1px solid #e5e7eb;border-radius:8px;'>
+        <tr><td style='background:#0D3320;padding:20px 24px;'><p style='margin:0;font-size:18px;font-weight:bold;color:#fff;'>AgroTalent Hub</p></td></tr>
+        <tr><td style='padding:28px 24px;'>
+          <h1 style='margin:0 0 12px;font-size:18px;color:#0D3320;'>Hi ${safeName},</h1>
+          <p style='margin:0 0 12px;font-size:15px;color:#374151;'>You have a new message from ${safeSender}.</p>
+          <div style='margin:0 0 18px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-size:14px;color:#374151;'>${safePreview}</div>
+          <table role='presentation' cellpadding='0' cellspacing='0'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(conversationLink)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>Reply Now</a></td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: recipientEmail,
+      subject,
+      html
+    })
+    await logEmailSend({
+      recipient_email: recipientEmail,
+      recipient_name: recipientName,
+      subject,
+      type: 'new_message',
+      status: 'sent'
+    })
+  } catch (error) {
+    await logEmailSend({
+      recipient_email: recipientEmail,
+      recipient_name: recipientName,
+      subject,
+      type: 'new_message',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error'
+    })
+    console.error('sendNewMessageEmail error:', error)
+  }
+}
+
+export async function sendPaymentConfirmedEmail(
+  farmEmail: string,
+  farmName: string,
+  amount: number,
+  currency: string,
+  jobTitle: string,
+  graduateName: string,
+  paymentReference: string
+): Promise<void> {
+  const subject = 'Payment Confirmed - ' + jobTitle
+  const placementsUrl = `${getFrontendBaseUrl()}/dashboard/farm/placements`
+  try {
+    const key = getResendApiKey()
+    if (!key) {
+      console.error('RESEND_API_KEY not configured')
+      return
+    }
+    const resend = new Resend(key)
+    const html = `
+<!DOCTYPE html>
+<html lang='en'>
+<body style='margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0'>
+    <tr><td align='center' style='padding:24px 16px;'>
+      <table role='presentation' width='100%' style='max-width:560px;border:1px solid #e5e7eb;border-radius:8px;'>
+        <tr><td style='background:#0D3320;padding:20px 24px;'><p style='margin:0;font-size:18px;font-weight:bold;color:#fff;'>AgroTalent Hub</p></td></tr>
+        <tr><td style='padding:28px 24px;'>
+          <h1 style='margin:0 0 12px;font-size:18px;color:#0D3320;'>Hi ${escapeEmailHtml(farmName)},</h1>
+          <p style='margin:0 0 12px;font-size:15px;color:#374151;'>Your recruitment fee payment has been confirmed.</p>
+          <p style='margin:0 0 8px;font-size:14px;color:#374151;'><strong>Amount:</strong> ${escapeEmailHtml(currency)} ${escapeEmailHtml(amount)}</p>
+          <p style='margin:0 0 8px;font-size:14px;color:#374151;'><strong>Position:</strong> ${escapeEmailHtml(jobTitle)}</p>
+          <p style='margin:0 0 8px;font-size:14px;color:#374151;'><strong>Candidate:</strong> ${escapeEmailHtml(graduateName)}</p>
+          <p style='margin:0 0 18px;font-size:14px;color:#374151;'><strong>Reference:</strong> ${escapeEmailHtml(paymentReference)}</p>
+          <table role='presentation' cellpadding='0' cellspacing='0'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(placementsUrl)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>View Placement</a></td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: farmEmail,
+      subject,
+      html
+    })
+    await logEmailSend({
+      recipient_email: farmEmail,
+      recipient_name: farmName,
+      subject,
+      type: 'payment_confirmed',
+      status: 'sent'
+    })
+  } catch (error) {
+    await logEmailSend({
+      recipient_email: farmEmail,
+      recipient_name: farmName,
+      subject,
+      type: 'payment_confirmed',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error'
+    })
+    console.error('sendPaymentConfirmedEmail error:', error)
+  }
+}
+
+export async function sendDocumentReviewedEmail(
+  userEmail: string,
+  userName: string,
+  documentType: string,
+  fileName: string,
+  status: 'approved' | 'rejected',
+  rejectionReason?: string | null
+): Promise<void> {
+  const subject = status === 'approved'
+    ? 'Document Approved: ' + fileName
+    : 'Document Update: ' + fileName
+  const profileUrl = `${getFrontendBaseUrl()}/dashboard/graduate/profile`
+  const uploadUrl = `${getFrontendBaseUrl()}/dashboard/graduate/documents`
+  try {
+    const key = getResendApiKey()
+    if (!key) {
+      console.error('RESEND_API_KEY not configured')
+      return
+    }
+    const resend = new Resend(key)
+    const approved = status === 'approved'
+    const html = `
+<!DOCTYPE html>
+<html lang='en'>
+<body style='margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;'>
+  <table role='presentation' width='100%' cellpadding='0' cellspacing='0'>
+    <tr><td align='center' style='padding:24px 16px;'>
+      <table role='presentation' width='100%' style='max-width:560px;border:1px solid #e5e7eb;border-radius:8px;'>
+        <tr><td style='background:#0D3320;padding:20px 24px;'><p style='margin:0;font-size:18px;font-weight:bold;color:#fff;'>AgroTalent Hub</p></td></tr>
+        <tr><td style='padding:28px 24px;'>
+          <h1 style='margin:0 0 12px;font-size:18px;color:#0D3320;'>Hi ${escapeEmailHtml(userName)},</h1>
+          ${
+            approved
+              ? `<p style='margin:0 0 12px;font-size:15px;color:#374151;'>Your ${escapeEmailHtml(documentType)} document has been approved. Your profile verification is progressing.</p>
+                 <p style='margin:0 0 16px;font-size:22px;color:#16a34a;'>✓</p>`
+              : `<p style='margin:0 0 12px;font-size:15px;color:#374151;'>Your ${escapeEmailHtml(documentType)} document could not be approved.</p>
+                 ${
+                   rejectionReason
+                     ? `<div style='margin:0 0 12px;padding:12px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;font-size:14px;color:#b91c1c;'><strong>Reason:</strong> ${escapeEmailHtml(rejectionReason)}</div>`
+                     : ''
+                 }
+                 <p style='margin:0 0 16px;font-size:14px;color:#374151;'>Please upload a new document that meets the requirements.</p>`
+          }
+          <table role='presentation' cellpadding='0' cellspacing='0'><tr><td style='border-radius:8px;background:#1A6B3C;'><a href='${escapeEmailHtml(approved ? profileUrl : uploadUrl)}' style='display:inline-block;padding:12px 20px;font-size:14px;font-weight:bold;color:#fff;text-decoration:none;'>${approved ? 'View Profile' : 'Upload New Document'}</a></td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+    await resend.emails.send({
+      from: EMAIL_FROM_NOREPLY,
+      to: userEmail,
+      subject,
+      html
+    })
+    await logEmailSend({
+      recipient_email: userEmail,
+      recipient_name: userName,
+      subject,
+      type: 'document_reviewed',
+      status: 'sent',
+      metadata: { document_type: documentType, status }
+    })
+  } catch (error) {
+    await logEmailSend({
+      recipient_email: userEmail,
+      recipient_name: userName,
+      subject,
+      type: 'document_reviewed',
+      status: 'failed',
+      error_message: errorMessage(error) || 'Unknown error',
+      metadata: { document_type: documentType, status }
+    })
+    console.error('sendDocumentReviewedEmail error:', error)
   }
 }
