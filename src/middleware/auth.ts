@@ -2,6 +2,17 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { AdminAuthRequest, AuthRequest } from '../types/auth.js';
 import { getSupabaseAdminClient, getSupabaseClient, getSupabaseClientWithAuth } from '../lib/supabase.js';
 
+function isSupabaseNetworkTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const anyErr = err as Error & { cause?: unknown; code?: string };
+  const cause = anyErr.cause as { code?: string } | undefined;
+  return (
+    anyErr.message.toLowerCase().includes('fetch failed') ||
+    anyErr.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    cause?.code === 'UND_ERR_CONNECT_TIMEOUT'
+  );
+}
+
 export const authenticate: RequestHandler = async (req, res, next) => {
   try {
     const supabase = getSupabaseClient();
@@ -23,7 +34,10 @@ export const authenticate: RequestHandler = async (req, res, next) => {
     authReq.accessToken = token;
     authReq.supabase = getSupabaseClientWithAuth(token);
     next();
-  } catch {
+  } catch (err) {
+    if (isSupabaseNetworkTimeoutError(err)) {
+      return res.status(503).json({ error: 'Authentication service unavailable. Please try again.' });
+    }
     return res.status(401).json({ error: 'Unauthorized' });
   }
 };
@@ -63,23 +77,30 @@ export const requireAdmin: RequestHandler = async (req, res, next) => {
 
     adminReq.profile = profile;
     next();
-  } catch {
+  } catch (err) {
+    if (isSupabaseNetworkTimeoutError(err)) {
+      return res.status(503).json({ error: 'Authentication service unavailable. Please try again.' });
+    }
     return res.status(403).json({ error: 'Forbidden' });
   }
 };
 
 export async function getUserFromRequest(req: Request) {
-  const supabase = getSupabaseClient();
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  try {
+    const supabase = getSupabaseClient();
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return null;
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) return null;
+    return user;
+  } catch {
     return null;
   }
-
-  const token = authHeader.split('Bearer ')[1];
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-
-  if (error || !user) return null;
-  return user;
 }
 
 export const requireAuth = authenticate;

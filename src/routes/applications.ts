@@ -414,6 +414,39 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
           String(jobFull.title)
         ).catch(console.error)
       }
+
+      if (jobFull.is_platform_job) {
+        const { data: admins } = await admin
+          .from('profiles')
+          .select('id, email, full_name, phone')
+          .eq('role', 'admin')
+        for (const adminUser of admins ?? []) {
+          void (async () => {
+            try {
+              await admin
+                .from('notifications')
+                .insert({
+                  user_id: adminUser.id,
+                  type: 'application_received',
+                  title: 'New Application on Platform Job',
+                  message: applicantName + ' applied for ' + String(jobFull.title),
+                  read: false,
+                })
+            } catch (insertError) {
+              console.error(insertError)
+            }
+          })()
+
+          if (adminUser.email) {
+            void sendApplicationReceivedEmail(
+              adminUser.email,
+              adminUser.full_name ?? 'Admin',
+              applicantName,
+              String(jobFull.title)
+            ).catch(console.error)
+          }
+        }
+      }
     })().catch(console.error);
 
     return res.status(201).json({ application });
