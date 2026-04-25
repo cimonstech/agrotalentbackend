@@ -3,7 +3,8 @@ import { getSupabaseAdminClient } from '../lib/supabase.js'
 
 const FISH_AFRICA_BASE_URL = 'https://api.letsfish.africa/v1'
 const FISH_AFRICA_AUTH = (process.env.FISH_AFRICA_APP_ID ?? '') + '.' + (process.env.FISH_AFRICA_APP_SECRET ?? '')
-const SENDER_ID = process.env.FISH_AFRICA_SENDER_ID ?? 'AgroTalent'
+/** Registered sender on LetsFish Africa; override with FISH_AFRICA_SENDER_ID if needed. */
+const SENDER_ID = (process.env.FISH_AFRICA_SENDER_ID ?? 'FISH_AFRICA').trim()
 
 interface SmsRecipient {
   [phoneNumber: string]: Record<string, string>
@@ -16,8 +17,17 @@ interface SendSmsParams {
 }
 
 async function sendSms(params: SendSmsParams): Promise<void> {
+  const auth = FISH_AFRICA_AUTH.trim()
+  if (!auth || auth === '.') {
+    console.error('[SMS] Not configured — set FISH_AFRICA_APP_ID and FISH_AFRICA_APP_SECRET')
+    return
+  }
+
+  const firstRecipient = params.recipients[0]
+  const recipientPhone = firstRecipient ? Object.keys(firstRecipient)[0] : 'unknown'
+
   try {
-    await axios.post(
+    const response = await axios.post(
       FISH_AFRICA_BASE_URL + '/sms/templates/send',
       {
         campaign_name: params.campaignName ?? 'AgroTalent Notification',
@@ -32,24 +42,29 @@ async function sendSms(params: SendSmsParams): Promise<void> {
         },
       }
     )
+    console.log(`[SMS] Sent "${params.campaignName}" to ${recipientPhone} — status ${response.status}`)
+  } catch (err: unknown) {
+    const detail = axios.isAxiosError(err)
+      ? `HTTP ${err.response?.status} — ${JSON.stringify(err.response?.data ?? err.message)}`
+      : err instanceof Error
+        ? err.message
+        : String(err)
+    console.error(`[SMS] Send failed (campaign="${params.campaignName}", to=${recipientPhone}): ${detail}`)
+    return
+  }
 
-    const firstRecipient = params.recipients[0]
-    const recipientPhone = firstRecipient ? Object.keys(firstRecipient)[0] : 'unknown'
-    const supabase = getSupabaseAdminClient()
-    try {
-      await supabase.from('email_logs').insert({
-        recipient_email: 'sms:' + recipientPhone,
-        subject: params.campaignName ?? 'SMS',
-        type: 'sms_' + (params.campaignName ?? 'notification').toLowerCase().replace(/\s+/g, '_'),
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        metadata: { channel: 'sms', campaign: params.campaignName },
-      })
-    } catch (logErr) {
-      console.error('SMS log insert failed:', logErr)
-    }
-  } catch (err) {
-    console.error('SMS send failed:', err)
+  const supabase = getSupabaseAdminClient()
+  try {
+    await supabase.from('email_logs').insert({
+      recipient_email: 'sms:' + recipientPhone,
+      subject: params.campaignName ?? 'SMS',
+      type: 'sms_' + (params.campaignName ?? 'notification').toLowerCase().replace(/\s+/g, '_'),
+      status: 'sent',
+      sent_at: new Date().toISOString(),
+      metadata: { channel: 'sms', campaign: params.campaignName },
+    })
+  } catch (logErr) {
+    console.error('[SMS] Log insert failed:', logErr)
   }
 }
 
@@ -58,6 +73,49 @@ function formatPhone(phone: string): string {
   if (cleaned.startsWith('0')) return '233' + cleaned.slice(1)
   if (cleaned.startsWith('233')) return cleaned
   return '233' + cleaned
+}
+
+export type SendRawSmsResult = { success: true } | { success: false; error: string }
+
+/**
+ * Plain-text SMS (admin broadcasts, etc.). Uses Fish Africa template API with a single merge field.
+ */
+export async function sendRawSms(
+  phone: string,
+  text: string,
+  campaignName = 'Admin Communications'
+): Promise<SendRawSmsResult> {
+  const auth = FISH_AFRICA_AUTH.trim()
+  if (!auth || auth === '.') {
+    return { success: false, error: 'SMS not configured (FISH_AFRICA_APP_ID / FISH_AFRICA_APP_SECRET)' }
+  }
+  const formatted = formatPhone(phone)
+  try {
+    await axios.post(
+      FISH_AFRICA_BASE_URL + '/sms/templates/send',
+      {
+        campaign_name: campaignName,
+        sender_id: SENDER_ID,
+        message: '{{body}}',
+        recipients: [{ [formatted]: { body: text } }],
+      },
+      {
+        headers: {
+          Authorization: 'Bearer ' + FISH_AFRICA_AUTH,
+          'Content-Type': 'application/json',
+        },
+      }
+    )
+    return { success: true }
+  } catch (err: unknown) {
+    const msg = axios.isAxiosError(err)
+      ? JSON.stringify(err.response?.data ?? err.message)
+      : err instanceof Error
+        ? err.message
+        : String(err)
+    console.error('sendRawSms failed:', msg)
+    return { success: false, error: msg }
+  }
 }
 
 export async function sendApplicationReceivedSms(

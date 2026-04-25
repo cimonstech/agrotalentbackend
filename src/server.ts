@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/node'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
 import compression from 'compression'
+import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
 import { doubleCsrf } from 'csrf-csrf'
 import authRoutes from './routes/auth.js'
@@ -21,6 +22,11 @@ import contactRoutes from './routes/contact.js'
 import placementsRoutes from './routes/placements.js'
 import paymentsRouter, { paymentsWebhookHandler } from './routes/payments.js'
 import { errorMessage } from './lib/errors.js'
+import {
+  csrfCookieSecure,
+  csrfSameSite,
+  csrfSessionIdentifier,
+} from './lib/csrf-session.js'
 import {
   authLimiter,
   writeLimiter,
@@ -45,6 +51,9 @@ const PORT: number = Number(process.env.PORT) || 3001
 
 app.use(compression())
 
+// csrf-csrf reads req.cookies; Express only populates this with cookie-parser
+app.use(cookieParser())
+
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -67,16 +76,21 @@ app.use(express.urlencoded({ extended: true }))
 
 const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
   getSecret: () => process.env.CSRF_SECRET ?? 'agrotalent-csrf-secret-change-in-production',
-  getSessionIdentifier: (req: Request) =>
-    String(req.headers.authorization ?? req.ip ?? 'anonymous'),
+  getSessionIdentifier: csrfSessionIdentifier,
   cookieName: 'x-csrf-token',
   cookieOptions: {
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure: csrfCookieSecure(),
+    sameSite: csrfSameSite(),
     httpOnly: true,
   },
   size: 64,
-  getCsrfTokenFromRequest: (req: Request) => req.headers['x-csrf-token'] as string,
+  getCsrfTokenFromRequest: (req: Request) => {
+    const h = req.headers
+    const raw = h?.['x-csrf-token'] ?? h?.['X-CSRF-TOKEN']
+    if (typeof raw === 'string') return raw
+    if (Array.isArray(raw)) return raw[0] ?? ''
+    return ''
+  },
 })
 
 app.get('/api/csrf-token', (req, res) => {
@@ -199,7 +213,6 @@ const REQUIRED_ENV = [
   'CSRF_SECRET',
   'FISH_AFRICA_APP_ID',
   'FISH_AFRICA_APP_SECRET',
-  'FISH_AFRICA_SENDER_ID',
 ]
 
 const missingEnv = REQUIRED_ENV.filter((key) => !process.env[key])

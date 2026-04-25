@@ -135,13 +135,40 @@ router.get('/communications/logs', requireAdmin, async (req, res) => {
   }
 });
 
+function normalizeCommunicationRecipientsKey(raw: unknown): string {
+  const k = String(raw ?? '')
+    .toLowerCase()
+    .trim();
+  const map: Record<string, string> = {
+    all: 'all',
+    farm: 'farms',
+    farms: 'farms',
+    graduate: 'graduates',
+    graduates: 'graduates',
+    student: 'students',
+    students: 'students',
+    skilled: 'skilled',
+    single: 'single',
+    custom: 'custom',
+  };
+  return map[k] || k;
+}
+
 // POST /api/admin/communications/send - Send bulk or single message
 router.post('/communications/send', requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
-    const { type, recipients, subject, message, userId, email } = req.body || {};
+    const {
+      type,
+      recipients: recipientsRaw,
+      subject,
+      message,
+      userId,
+      email,
+      customRecipients: customRecipientsRaw,
+    } = req.body || {};
 
-    if (!type || !recipients || !message) {
+    if (!type || recipientsRaw == null || !message) {
       return res.status(400).json({ error: 'type, recipients, and message are required' });
     }
 
@@ -149,10 +176,12 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'subject is required for email' });
     }
 
+    const recipientsKey = normalizeCommunicationRecipientsKey(recipientsRaw);
+
     // Resolve recipients
     let targets: ProfileTargetRow[] = [];
 
-    if (recipients === 'single') {
+    if (recipientsKey === 'single') {
       if (userId) {
         const { data } = await supabaseAdmin
           .from('profiles')
@@ -170,53 +199,91 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
       } else {
         return res.status(400).json({ error: 'userId or email is required for single recipient' });
       }
+    } else if (recipientsKey === 'custom') {
+      const parts = String(customRecipientsRaw ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length === 0) {
+        return res.status(400).json({ error: 'customRecipients is required for custom audience' });
+      }
+      for (const em of parts) {
+        const { data: row } = await supabaseAdmin
+          .from('profiles')
+          .select('id, email, full_name, phone, role')
+          .eq('email', em)
+          .maybeSingle();
+        if (row) {
+          targets.push(row);
+        } else {
+          targets.push({
+            id: crypto.randomUUID(),
+            email: em,
+            full_name: null,
+            phone: null,
+            role: 'unknown',
+          });
+        }
+      }
     } else {
       let query = supabaseAdmin
         .from('profiles')
         .select('id, email, full_name, phone, role')
         .limit(2000);
 
-      if (recipients === 'farms') query = query.eq('role', 'farm');
-      if (recipients === 'graduates') query = query.eq('role', 'graduate');
-      if (recipients === 'students') query = query.eq('role', 'student');
-      // 'all' -> no filter
+      if (recipientsKey === 'farms') query = query.eq('role', 'farm');
+      if (recipientsKey === 'graduates') query = query.eq('role', 'graduate');
+      if (recipientsKey === 'students') query = query.eq('role', 'student');
+      if (recipientsKey === 'skilled') query = query.eq('role', 'skilled');
+      if (
+        recipientsKey !== 'all' &&
+        recipientsKey !== 'farms' &&
+        recipientsKey !== 'graduates' &&
+        recipientsKey !== 'students' &&
+        recipientsKey !== 'skilled'
+      ) {
+        return res.status(400).json({
+          error:
+            'Invalid recipients. Use all, farm(s), graduate(s), student(s), skilled, single, or custom.',
+        });
+      }
 
       const { data: profileRows } = await query;
       const profiles = profileRows || [];
 
-      // Fill in missing emails from auth.users (profile.email can be null if not synced)
       const authEmailById: Record<string, string | null> = {};
       let page = 1;
       let hasMore = true;
       while (hasMore) {
         const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
         const users = listData?.users || [];
-        users.forEach((u: User) => { authEmailById[u.id] = u.email ?? null; });
+        users.forEach((u: User) => {
+          authEmailById[u.id] = u.email ?? null;
+        });
         hasMore = users.length === 1000;
         page += 1;
       }
       targets = profiles.map((p) => ({
         ...p,
-        email: (p.email && p.email.trim()) ? p.email.trim() : (authEmailById[p.id] || null)
+        email: p.email && p.email.trim() ? p.email.trim() : authEmailById[p.id] || null,
       }));
     }
 
     const recipientCount = targets.length;
 
-    // Create log record first
     const logPayload = {
       type,
-      recipients,
+      recipients: recipientsKey,
       subject: subject || null,
       message,
       recipient_count: recipientCount,
       success_count: 0,
       failure_count: 0,
       status: 'sending',
-      created_by: (req as AdminAuthRequest).user.id
+      created_by: (req as AdminAuthRequest).user.id,
     };
 
-    let logId = null;
+    let logId: string | null = null;
     const { data: logRow } = await supabaseAdmin
       .from('communication_logs')
       .insert(logPayload)
@@ -227,7 +294,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
     let successCount = 0;
     let failureCount = 0;
     let skippedCount = 0;
-    const failures = [];
+    const failures: { email?: string; phone?: string; error: string }[] = [];
 
     if (type === 'email') {
       const { sendNotificationEmail } = await import('../services/email-service.js');
@@ -237,7 +304,13 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
           skippedCount += 1;
           continue;
         }
-        const result = await sendNotificationEmail(t.email, subject, message, t.full_name || '', { role: t.role });
+        const result = await sendNotificationEmail(
+          t.email,
+          subject,
+          message,
+          t.full_name || '',
+          { role: t.role }
+        );
         if (result?.success) {
           successCount += 1;
         } else {
@@ -246,31 +319,50 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
         }
       }
     } else if (type === 'sms') {
-      // SMS provider not configured yet. We log the attempt.
-      failureCount = recipientCount;
-      failures.push({ error: 'SMS provider not configured' });
+      const { sendRawSms } = await import('../services/sms-service.js');
+      for (const t of targets) {
+        if (!t.phone || !String(t.phone).trim()) {
+          skippedCount += 1;
+          continue;
+        }
+        const result = await sendRawSms(t.phone, message, 'Admin Communications');
+        if (result.success) {
+          successCount += 1;
+        } else {
+          failureCount += 1;
+          failures.push({ phone: t.phone, error: result.error });
+        }
+      }
     } else {
       return res.status(400).json({ error: 'Invalid type. Use email or sms.' });
     }
 
-    // Update log status
+    const finalStatus = successCount === 0 ? 'failed' : 'sent';
+
     if (logId) {
       await supabaseAdmin
         .from('communication_logs')
         .update({
           success_count: successCount,
           failure_count: failureCount,
-          status: type === 'sms' ? 'failed' : 'sent',
-          error_details: failures.length ? failures : null
+          status: finalStatus,
+          error_details: failures.length ? failures : null,
         })
         .eq('id', logId);
     }
 
-    const messageText = type === 'sms'
-      ? 'SMS provider not configured yet. Logged the attempt.'
-      : (skippedCount > 0
-        ? `Email sent to ${successCount}, ${failureCount} failed, ${skippedCount} skipped (no email address).`
-        : `Email sent to ${successCount}, ${failureCount} failed.`);
+    let messageText: string;
+    if (type === 'sms') {
+      messageText =
+        skippedCount > 0
+          ? `SMS sent: ${successCount} ok, ${failureCount} failed, ${skippedCount} skipped (no phone).`
+          : `SMS sent: ${successCount} ok, ${failureCount} failed.`;
+    } else {
+      messageText =
+        skippedCount > 0
+          ? `Email sent to ${successCount}, ${failureCount} failed, ${skippedCount} skipped (no email address).`
+          : `Email sent to ${successCount}, ${failureCount} failed.`;
+    }
 
     return res.json({
       message: messageText,
@@ -278,7 +370,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
       recipientCount,
       successCount,
       failureCount,
-      skippedCount
+      skippedCount,
     });
   } catch (error) {
     console.error('Communications send error:', error);
