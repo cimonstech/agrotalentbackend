@@ -92,7 +92,7 @@ const createJobObjectSchema = z.object({
   required_specialization: z.string().max(100).optional(),
   expires_at: z.string().optional(),
   max_applications: z.coerce.number().int().min(1).optional(),
-  farm_id: z.uuid().optional(),
+  farm_id: z.string().uuid().optional(),
 })
 
 const jobSalaryRangeRefine = <S extends z.ZodObject<z.ZodRawShape>>(schema: S) =>
@@ -117,8 +117,8 @@ export const updateJobSchema = jobSalaryRangeRefine(
 )
 
 export const createApplicationSchema = z.object({
-  job_id: z.uuid('Invalid job ID'),
-  cover_letter: z.string().max(2000).optional(),
+  job_id: z.string().uuid('Invalid job ID'),
+  cover_letter: z.string().max(2000).nullable().optional(),
 })
 
 export const updateApplicationStatusSchema = z.object({
@@ -160,7 +160,7 @@ export const updateProfileSchema = z.object({
 })
 
 export const createPlacementSchema = z.object({
-  application_id: z.uuid('Invalid application ID'),
+  application_id: z.string().uuid('Invalid application ID'),
   start_date: z.string().optional(),
   end_date: z.string().optional(),
 })
@@ -177,7 +177,7 @@ export const updatePlacementSchema = z.object({
 })
 
 export const initiatePaymentSchema = z.object({
-  placement_id: z.uuid('Invalid placement ID'),
+  placement_id: z.string().uuid('Invalid placement ID'),
 })
 
 export const verifyPaymentSchema = z.object({
@@ -185,20 +185,20 @@ export const verifyPaymentSchema = z.object({
 })
 
 export const sendMessageSchema = z.object({
-  conversation_id: z.uuid('Invalid conversation ID'),
+  conversation_id: z.string().uuid('Invalid conversation ID'),
   content: z.string().min(1, 'Message cannot be empty').max(2000),
 })
 
 export const createConversationSchema = z.object({
-  other_user_id: z.uuid('Invalid user ID'),
-  job_id: z.uuid().optional(),
+  other_user_id: z.string().uuid('Invalid user ID'),
+  job_id: z.string().uuid().optional(),
 })
 
 export const postMessageBodySchema = z
   .object({
-    conversation_id: z.uuid().optional(),
-    recipient_id: z.uuid().optional(),
-    job_id: z.uuid().optional(),
+    conversation_id: z.string().uuid().optional(),
+    recipient_id: z.string().uuid().optional(),
+    job_id: z.string().uuid().optional(),
     content: z.string().min(1, 'Message cannot be empty').max(2000),
   })
   .superRefine((data, ctx) => {
@@ -217,7 +217,7 @@ export const createTrainingSchema = z.object({
   title: z.string().min(3).max(150),
   description: z.string().max(1000).optional(),
   session_type: z.enum(['orientation', 'pre_employment', 'quarterly', 'custom']),
-  zoom_link: z.union([z.url(), z.literal('')]).nullish(),
+  zoom_link: z.union([z.string().url(), z.literal('')]).nullish(),
   zoom_meeting_id: z.string().max(50).optional(),
   zoom_password: z.string().max(50).optional(),
   scheduled_at: z.string().min(1, 'Invalid date format'),
@@ -233,11 +233,11 @@ export const createNoticeSchema = z.object({
   title: z.string().min(3).max(200),
   body_html: z.string().min(1).max(10000),
   audience: z.enum(['all', 'farm', 'graduate', 'student']),
-  link: z.union([z.url(), z.literal('')]).nullish(),
+  link: z.union([z.string().url(), z.literal('')]).nullish(),
   attachments: z
     .array(
       z.object({
-        url: z.url(),
+        url: z.string().url(),
         name: z.string().optional(),
       })
     )
@@ -299,10 +299,10 @@ export const paginationSchema = z.object({
 })
 
 export const jobsListQuerySchema = paginationSchema.partial().extend({
-  id: z.uuid().optional(),
+  id: z.string().uuid().optional(),
   location: z.string().max(100).optional(),
   job_type: z.string().max(50).optional(),
   specialization: z.string().max(100).optional(),
-  farm_id: z.uuid().optional(),
+  farm_id: z.string().uuid().optional(),
   status: z.string().max(20).optional(),
 })

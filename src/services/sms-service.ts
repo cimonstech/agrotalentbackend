@@ -2,9 +2,14 @@ import axios from 'axios'
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 
 const FISH_AFRICA_BASE_URL = 'https://api.letsfish.africa/v1'
-const FISH_AFRICA_AUTH = (process.env.FISH_AFRICA_APP_ID ?? '') + '.' + (process.env.FISH_AFRICA_APP_SECRET ?? '')
-/** Registered sender on LetsFish Africa; override with FISH_AFRICA_SENDER_ID if needed. */
-const SENDER_ID = (process.env.FISH_AFRICA_SENDER_ID ?? 'FISH_AFRICA').trim()
+
+function getSmsConfig() {
+  const appId = process.env.FISH_AFRICA_APP_ID ?? ''
+  const appSecret = process.env.FISH_AFRICA_APP_SECRET ?? ''
+  const auth = appId + '.' + appSecret
+  const senderId = (process.env.FISH_AFRICA_SENDER_ID ?? 'AgroTalentH').trim()
+  return { appId, appSecret, auth, senderId }
+}
 
 interface SmsRecipient {
   [phoneNumber: string]: Record<string, string>
@@ -17,54 +22,67 @@ interface SendSmsParams {
 }
 
 async function sendSms(params: SendSmsParams): Promise<void> {
-  const auth = FISH_AFRICA_AUTH.trim()
-  if (!auth || auth === '.') {
-    console.error('[SMS] Not configured — set FISH_AFRICA_APP_ID and FISH_AFRICA_APP_SECRET')
+  const { appId, appSecret, auth, senderId } = getSmsConfig()
+
+  if (!appId || !appSecret) {
+    console.warn('[SMS] Not configured')
     return
   }
 
-  const firstRecipient = params.recipients[0]
-  const recipientPhone = firstRecipient ? Object.keys(firstRecipient)[0] : 'unknown'
+  for (const recipientObj of params.recipients) {
+    const phone = Object.keys(recipientObj)[0]
+    const variables = recipientObj[phone] as Record<string, string>
 
-  try {
-    const response = await axios.post(
-      FISH_AFRICA_BASE_URL + '/sms/templates/send',
-      {
-        campaign_name: params.campaignName ?? 'AgroTalent Notification',
-        sender_id: SENDER_ID,
-        message: params.message,
-        recipients: params.recipients,
-      },
-      {
-        headers: {
-          Authorization: 'Bearer ' + FISH_AFRICA_AUTH,
-          'Content-Type': 'application/json',
+    let interpolatedMessage = params.message
+    for (const [key, value] of Object.entries(variables)) {
+      interpolatedMessage = interpolatedMessage.replace(
+        new RegExp('\\{\\{' + key + '\\}\\}', 'g'),
+        value
+      )
+    }
+
+    console.log('[SMS] Sending to:', phone)
+    console.log('[SMS] Message:', interpolatedMessage)
+
+    try {
+      const response = await axios.post(
+        FISH_AFRICA_BASE_URL + '/sms',
+        {
+          campaign_name: params.campaignName ?? 'AgroTalent',
+          sender_id: senderId,
+          message: interpolatedMessage,
+          recipients: [phone],
         },
-      }
-    )
-    console.log(`[SMS] Sent "${params.campaignName}" to ${recipientPhone} — status ${response.status}`)
-  } catch (err: unknown) {
-    const detail = axios.isAxiosError(err)
-      ? `HTTP ${err.response?.status} — ${JSON.stringify(err.response?.data ?? err.message)}`
-      : err instanceof Error
-        ? err.message
-        : String(err)
-    console.error(`[SMS] Send failed (campaign="${params.campaignName}", to=${recipientPhone}): ${detail}`)
-    return
-  }
+        {
+          headers: {
+            Authorization: 'Bearer ' + auth,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
 
-  const supabase = getSupabaseAdminClient()
-  try {
-    await supabase.from('email_logs').insert({
-      recipient_email: 'sms:' + recipientPhone,
-      subject: params.campaignName ?? 'SMS',
-      type: 'sms_' + (params.campaignName ?? 'notification').toLowerCase().replace(/\s+/g, '_'),
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-      metadata: { channel: 'sms', campaign: params.campaignName },
-    })
-  } catch (logErr) {
-    console.error('[SMS] Log insert failed:', logErr)
+      console.log('[SMS] Success:', response.status, JSON.stringify(response.data))
+
+      try {
+        const supabase = getSupabaseAdminClient()
+        await supabase.from('email_logs').insert({
+          recipient_email: 'sms:' + phone,
+          subject: params.campaignName ?? 'SMS',
+          type: 'sms',
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          metadata: { channel: 'sms', phone },
+        })
+      } catch (logErr) {
+        console.error('[SMS] Log error:', logErr)
+      }
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        console.error('[SMS] Failed:', JSON.stringify(err.response?.data ?? err.message))
+      } else {
+        console.error('[SMS] Failed:', err instanceof Error ? err.message : String(err))
+      }
+    }
   }
 }
 
@@ -82,38 +100,57 @@ export type SendRawSmsResult = { success: true } | { success: false; error: stri
  */
 export async function sendRawSms(
   phone: string,
-  text: string,
+  message: string,
   campaignName = 'Admin Communications'
 ): Promise<SendRawSmsResult> {
-  const auth = FISH_AFRICA_AUTH.trim()
-  if (!auth || auth === '.') {
-    return { success: false, error: 'SMS not configured (FISH_AFRICA_APP_ID / FISH_AFRICA_APP_SECRET)' }
+  const { appId, appSecret, auth, senderId } = getSmsConfig()
+  if (!appId || !appSecret) {
+    console.warn('[SMS] Not configured')
+    return { success: false, error: 'SMS not configured' }
   }
-  const formatted = formatPhone(phone)
+
+  const formattedPhone = formatPhone(phone)
+  console.log('[SMS Raw] Sending to:', formattedPhone, '| Message:', message.substring(0, 60))
+
   try {
-    await axios.post(
-      FISH_AFRICA_BASE_URL + '/sms/templates/send',
+    const response = await axios.post(
+      FISH_AFRICA_BASE_URL + '/sms',
       {
-        campaign_name: campaignName,
-        sender_id: SENDER_ID,
-        message: '{{body}}',
-        recipients: [{ [formatted]: { body: text } }],
+        campaign_name: campaignName ?? 'AgroTalent',
+        sender_id: senderId,
+        message: message,
+        recipients: [formattedPhone],
       },
       {
         headers: {
-          Authorization: 'Bearer ' + FISH_AFRICA_AUTH,
+          Authorization: 'Bearer ' + auth,
           'Content-Type': 'application/json',
         },
       }
     )
+    console.log('[SMS Raw] Success:', response.status, JSON.stringify(response.data))
+    try {
+      const supabase = getSupabaseAdminClient()
+      await supabase.from('email_logs').insert({
+        recipient_email: 'sms:' + formattedPhone,
+        subject: campaignName ?? 'SMS',
+        type: 'sms',
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        metadata: { channel: 'sms', phone: formattedPhone },
+      })
+    } catch (logErr) {
+      console.error('[SMS] Log error:', logErr)
+    }
     return { success: true }
   } catch (err: unknown) {
-    const msg = axios.isAxiosError(err)
-      ? JSON.stringify(err.response?.data ?? err.message)
-      : err instanceof Error
-        ? err.message
-        : String(err)
-    console.error('sendRawSms failed:', msg)
+    if (axios.isAxiosError(err)) {
+      const msg = JSON.stringify(err.response?.data ?? err.message)
+      console.error('[SMS Raw] Failed:', msg)
+      return { success: false, error: msg }
+    }
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[SMS Raw] Failed:', msg)
     return { success: false, error: msg }
   }
 }

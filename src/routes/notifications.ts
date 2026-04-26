@@ -3,7 +3,7 @@ import { getSupabaseAdminClient, getSupabaseClient } from '../lib/supabase.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import type { AuthRequest } from '../types/auth.js';
 import { errorMessage } from '../lib/errors.js';
-import { sendVerificationApprovedSms } from '../services/sms-service.js';
+import { sendVerificationApprovedSms, sendApplicationStatusSms } from '../services/sms-service.js';
 
 const router = express.Router();
 
@@ -69,7 +69,7 @@ router.patch('/', authenticate, async (req, res) => {
 router.post('/send-sms', requireAuth, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
-    const { user_id, type } = req.body as { user_id?: string; type?: string }
+    const { user_id, type, job_title, status } = req.body as { user_id?: string; type?: string; job_title?: string; status?: string }
     if (!user_id || !type) {
       return res.status(400).json({ error: 'user_id and type are required' })
     }
@@ -78,8 +78,12 @@ router.post('/send-sms', requireAuth, async (req, res) => {
       .select('full_name, phone')
       .eq('id', user_id)
       .single()
-    if (profile?.phone && type === 'verification_approved') {
-      void sendVerificationApprovedSms(profile.phone, profile.full_name ?? 'User').catch(console.error)
+    if (profile?.phone) {
+      if (type === 'verification_approved') {
+        void sendVerificationApprovedSms(profile.phone, profile.full_name ?? 'User').catch(console.error)
+      } else if (type === 'application_status' && status && job_title) {
+        void sendApplicationStatusSms(profile.phone, profile.full_name ?? 'Applicant', job_title, status).catch(console.error)
+      }
     }
     return res.json({ success: true })
   } catch (error) {

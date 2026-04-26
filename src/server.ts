@@ -19,6 +19,7 @@ import dataCollectionRoutes from './routes/data-collection.js'
 import statsRoutes from './routes/stats.js'
 import adminRoutes from './routes/admin.js'
 import contactRoutes from './routes/contact.js'
+import testRouter from './routes/test.js'
 import placementsRoutes from './routes/placements.js'
 import paymentsRouter, { paymentsWebhookHandler } from './routes/payments.js'
 import { errorMessage } from './lib/errors.js'
@@ -50,6 +51,11 @@ app.set('trust proxy', 1)
 const PORT: number = Number(process.env.PORT) || 3001
 
 app.use(compression())
+
+app.use((req, _res, next) => {
+  console.log(`[REQ] ${req.method} ${req.path}`)
+  next()
+})
 
 // csrf-csrf reads req.cookies; Express only populates this with cookie-parser
 app.use(cookieParser())
@@ -149,6 +155,10 @@ if (!supabaseServiceKey) {
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
+
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/test', testRouter)
+}
 
 app.use('/api/auth', authRoutes)
 app.use('/api/profile', profileRoutes)
