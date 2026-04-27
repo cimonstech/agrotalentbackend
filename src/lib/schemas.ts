@@ -124,12 +124,13 @@ export const createApplicationSchema = z.object({
 export const updateApplicationStatusSchema = z.object({
   status: z.enum([
     'pending',
-    'reviewed',
+    'reviewing',
     'shortlisted',
     'accepted',
     'rejected',
+    'withdrawn',
   ]),
-  review_notes: z.string().max(1000).optional(),
+  review_notes: z.string().max(1000).nullable().optional(),
 })
 
 export const updateProfileSchema = z.object({

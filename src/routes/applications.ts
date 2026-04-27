@@ -533,19 +533,9 @@ router.patch(
     }
     
     console.log('[PATCH /applications/:id] User role:', profile.role);
-    
-    if (!['farm', 'admin'].includes(profile.role)) {
-      console.error('[PATCH /applications/:id] Invalid role:', profile.role, 'for user:', (req as AuthRequest).user.id);
-      return res.status(403).json({
-        error: 'Only employers/farms and admins can update application status',
-        userRole: profile.role
-      });
-    }
-    
+
     const { status, review_notes } = req.body;
-    
-    // Get application to verify farm owns the job - use admin client to bypass RLS
-    // Include applicant and job data for email notifications
+
     const { data: application, error: appError } = await supabaseAdmin
       .from('applications')
       .select(`
@@ -566,7 +556,7 @@ router.patch(
       `)
       .eq('id', req.params.id)
       .single();
-    
+
     if (appError || !application) {
       console.error('[PATCH /applications/:id] Application fetch error:', appError);
       return res.status(404).json({ error: 'Application not found' });
@@ -577,15 +567,60 @@ router.patch(
       title?: string;
       profiles?: { farm_name?: string } | { farm_name?: string }[] | null;
     } | null);
-    
+
     console.log('[PATCH /applications/:id] Application IDs:', {
       id: application.id,
       applicantId: application.applicant_id,
       jobId: application.job_id,
       farmId: jobRel?.farm_id
     });
-    
-    // Verify farm owns this job (unless admin)
+
+    const applicantSelfRoles = ['graduate', 'student', 'skilled'] as const;
+    if (applicantSelfRoles.includes(profile.role as (typeof applicantSelfRoles)[number])) {
+      if (application.applicant_id !== (req as AuthRequest).user.id) {
+        return res.status(403).json({ error: 'You can only update your own applications' });
+      }
+      if (status !== 'withdrawn') {
+        return res.status(403).json({
+          error: 'Applicants may only set status to withdrawn on this endpoint',
+        });
+      }
+      if (review_notes != null && String(review_notes).trim() !== '') {
+        return res.status(400).json({ error: 'Review notes cannot be set when withdrawing' });
+      }
+      const currentStatus = application.status as string;
+      if (currentStatus === 'withdrawn') {
+        return res.status(400).json({ error: 'Application is already withdrawn' });
+      }
+      if (currentStatus === 'accepted') {
+        return res.status(400).json({
+          error: 'Cannot withdraw an accepted application. Contact the employer.',
+        });
+      }
+
+      const { data: updatedApp, error: withdrawErr } = await supabaseAdmin
+        .from('applications')
+        .update({
+          status: 'withdrawn',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', req.params.id)
+        .eq('applicant_id', (req as AuthRequest).user.id)
+        .select()
+        .single();
+
+      if (withdrawErr) throw withdrawErr;
+      return res.json({ application: updatedApp });
+    }
+
+    if (!['farm', 'admin'].includes(profile.role)) {
+      console.error('[PATCH /applications/:id] Invalid role:', profile.role, 'for user:', (req as AuthRequest).user.id);
+      return res.status(403).json({
+        error: 'Only employers/farms and admins can update application status',
+        userRole: profile.role
+      });
+    }
+
     if (profile.role === 'farm' && jobRel?.farm_id !== (req as AuthRequest).user.id) {
       return res.status(403).json({
         error: 'You can only update applications for your own jobs'
