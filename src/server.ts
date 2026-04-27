@@ -140,10 +140,9 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error(
+  console.warn(
     'Missing Supabase configuration. Please set SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env'
   )
-  process.exit(1)
 }
 
 if (!supabaseServiceKey) {
@@ -227,8 +226,7 @@ const REQUIRED_ENV = [
 
 const missingEnv = REQUIRED_ENV.filter((key) => !process.env[key])
 if (missingEnv.length > 0) {
-  console.error('Missing required environment variables:', missingEnv.join(', '))
-  process.exit(1)
+  console.warn('Warning: Missing environment variables:', missingEnv.join(', '))
 }
 
 app.listen(PORT, () => {

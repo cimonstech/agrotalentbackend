@@ -511,6 +511,9 @@ router.patch(
   validate(updateApplicationStatusSchema),
   async (req, res) => {
   try {
+    console.log('[PATCH applications] Body received:', JSON.stringify(req.body))
+    console.log('[PATCH applications] Params:', req.params)
+
     const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
     
