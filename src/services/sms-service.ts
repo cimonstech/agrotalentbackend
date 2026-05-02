@@ -93,7 +93,7 @@ function formatPhone(phone: string): string {
   return '233' + cleaned
 }
 
-export type SendRawSmsResult = { success: true } | { success: false; error: string }
+export type SendRawSmsResult = { success: boolean; error?: string }
 
 /**
  * Plain-text SMS (admin broadcasts, etc.). Uses Fish Africa template API with a single merge field.
