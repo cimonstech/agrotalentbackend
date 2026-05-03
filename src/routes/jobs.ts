@@ -14,7 +14,7 @@ const router = express.Router();
 // --- simple in-memory cache for job list queries ---
 type CacheEntry = { data: unknown; expiresAt: number }
 const listCache = new Map<string, CacheEntry>()
-const CACHE_TTL_MS = 60_000 // 60 seconds
+const JOB_LIST_CACHE_TTL_MS = 60_000 // 60 seconds
 
 function cacheGet(key: string): unknown | null {
   const entry = listCache.get(key)
@@ -24,7 +24,7 @@ function cacheGet(key: string): unknown | null {
 }
 
 function cacheSet(key: string, data: unknown): void {
-  listCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS })
+  listCache.set(key, { data, expiresAt: Date.now() + JOB_LIST_CACHE_TTL_MS })
 }
 
 function cacheInvalidate(): void { listCache.clear() }
@@ -40,11 +40,29 @@ const jobListSelect = `
         )
       `;
 
-// GET /api/jobs/public - Active jobs for public homepage (no auth)
-router.get('/public', async (_req, res) => {
+// Simple in-memory cache for the unfiltered public jobs list (keyed by page:limit)
+const publicJobsCache = new Map<string, { data: unknown; cachedAt: number }>()
+const CACHE_TTL_MS = 60 * 1000 // 60 seconds
+
+router.get('/public', async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient()
-    const { data, error } = await supabaseAdmin
+
+    const search = (req.query.search as string | undefined)?.trim() ?? ''
+    const type = (req.query.type as string | undefined)?.trim() ?? ''
+    const page = parseInt((req.query.page as string | undefined) ?? '1', 10)
+    const limit = parseInt((req.query.limit as string | undefined) ?? '12', 10)
+    const offset = (page - 1) * limit
+
+    const isFiltered = search.length > 0 || type.length > 0
+
+    const cacheKey = `${page}:${limit}`
+    const cached = publicJobsCache.get(cacheKey)
+    if (!isFiltered && cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+      return res.json(cached.data)
+    }
+
+    let query = supabaseAdmin
       .from('jobs')
       .select(
         `
@@ -57,20 +75,51 @@ router.get('/public', async (_req, res) => {
         salary_max,
         salary_currency,
         is_sourced_job,
+        image_url,
+        required_specialization,
         profiles:farm_id (
           farm_name,
           full_name
         )
-      `
+      `,
+        { count: 'exact' }
       )
       .eq('status', 'active')
       .is('deleted_at', null)
       .is('hidden_at', null)
+
+    // Full-text search using the GIN index
+    if (search.length > 0) {
+      query = query.textSearch('search_vector', search, {
+        type: 'websearch',
+        config: 'english',
+      })
+    }
+
+    // Job type filter
+    if (type.length > 0) {
+      query = query.eq('job_type', type)
+    }
+
+    const { data, error, count } = await query
       .order('created_at', { ascending: false })
-      .limit(4)
+      .range(offset, offset + limit - 1)
 
     if (error) throw error
-    return res.json({ jobs: data ?? [] })
+
+    const payload = {
+      jobs: data ?? [],
+      total: count ?? 0,
+      page,
+      limit,
+    }
+
+    // Cache only unfiltered results
+    if (!isFiltered) {
+      publicJobsCache.set(cacheKey, { data: payload, cachedAt: Date.now() })
+    }
+
+    return res.json(payload)
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) })
   }

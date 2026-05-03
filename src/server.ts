@@ -19,9 +19,12 @@ import dataCollectionRoutes from './routes/data-collection.js'
 import statsRoutes from './routes/stats.js'
 import adminRoutes from './routes/admin.js'
 import contactRoutes from './routes/contact.js'
+import farmsRoutes from './routes/farms.js'
 import testRouter from './routes/test.js'
 import placementsRoutes from './routes/placements.js'
 import paymentsRouter, { paymentsWebhookHandler } from './routes/payments.js'
+import cron from 'node-cron'
+import { enforceApplicationDeadlines } from './services/deadlineEnforcement.js'
 import { errorMessage } from './lib/errors.js'
 import {
   csrfCookieSecure,
@@ -115,12 +118,14 @@ app.use('/api/documents', doubleCsrfProtection)
 app.use('/api/training', doubleCsrfProtection)
 app.use('/api/notices', doubleCsrfProtection)
 app.use('/api/contact', doubleCsrfProtection)
+app.use('/api/farms', doubleCsrfProtection)
 
 // Auth routes: strict
 app.use('/api/auth', authLimiter)
 // Public form routes: very strict
 app.use('/api/contact', publicFormLimiter)
 // Write operations: medium
+app.use('/api/farms', writeLimiter)
 app.use('/api/applications', writeLimiter)
 app.use('/api/placements', writeLimiter)
 app.use('/api/payments', writeLimiter)
@@ -173,6 +178,7 @@ app.use('/api/data-collection', dataCollectionRoutes)
 app.use('/api/stats', statsRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/contact', contactRoutes)
+app.use('/api/farms', farmsRoutes)
 app.use('/api/placements', placementsRoutes)
 app.use('/api/payments', paymentsRouter)
 
@@ -228,6 +234,24 @@ const missingEnv = REQUIRED_ENV.filter((key) => !process.env[key])
 if (missingEnv.length > 0) {
   console.warn('Warning: Missing environment variables:', missingEnv.join(', '))
 }
+
+// Run deadline enforcement daily at midnight Africa/Accra time
+cron.schedule(
+  '0 0 * * *',
+  async () => {
+    console.log('[Cron] Running application deadline enforcement...')
+    const result = await enforceApplicationDeadlines()
+    console.log(
+      `[Cron] Deadline enforcement complete - closed: ${result.closed}, errors: ${result.errors.length}`
+    )
+    if (result.errors.length > 0) {
+      console.error('[Cron] Errors:', result.errors)
+    }
+  },
+  {
+    timezone: 'Africa/Accra',
+  }
+)
 
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`)

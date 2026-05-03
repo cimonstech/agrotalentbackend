@@ -10,6 +10,7 @@ import {
   sendNotificationEmail,
   sendTrainingScheduledEmail
 } from '../services/email-service.js';
+import { enforceApplicationDeadlines } from '../services/deadlineEnforcement.js';
 import { sendDocumentReviewedSms, sendTrainingScheduledSms } from '../services/sms-service.js';
 import type { AdminAuthRequest } from '../types/auth.js';
 import { queryParamToString } from '../lib/query.js';
@@ -1752,6 +1753,22 @@ router.get('/jobs', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Admin jobs fetch error:', error);
     return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch jobs' });
+  }
+});
+
+router.post('/jobs/enforce-deadlines', requireAdmin, async (_req, res) => {
+  try {
+    const result = await enforceApplicationDeadlines();
+    return res.json({
+      success: true,
+      closed: result.closed,
+      errors: result.errors,
+      message: `${result.closed} job(s) closed due to passed application deadlines.`,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Unknown error',
+    });
   }
 });
 
