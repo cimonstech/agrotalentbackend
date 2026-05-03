@@ -11,6 +11,25 @@ import {
 } from '../lib/schemas.js'
 const router = express.Router();
 
+// --- simple in-memory cache for job list queries ---
+type CacheEntry = { data: unknown; expiresAt: number }
+const listCache = new Map<string, CacheEntry>()
+const CACHE_TTL_MS = 60_000 // 60 seconds
+
+function cacheGet(key: string): unknown | null {
+  const entry = listCache.get(key)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) { listCache.delete(key); return null }
+  return entry.data
+}
+
+function cacheSet(key: string, data: unknown): void {
+  listCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS })
+}
+
+function cacheInvalidate(): void { listCache.clear() }
+// ---------------------------------------------------
+
 const jobListSelect = `
         *,
         profiles:farm_id (
@@ -20,6 +39,42 @@ const jobListSelect = `
           farm_type
         )
       `;
+
+// GET /api/jobs/public - Active jobs for public homepage (no auth)
+router.get('/public', async (_req, res) => {
+  try {
+    const supabaseAdmin = getSupabaseAdminClient()
+    const { data, error } = await supabaseAdmin
+      .from('jobs')
+      .select(
+        `
+        id,
+        title,
+        job_type,
+        location,
+        city,
+        salary_min,
+        salary_max,
+        salary_currency,
+        is_sourced_job,
+        profiles:farm_id (
+          farm_name,
+          full_name
+        )
+      `
+      )
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .is('hidden_at', null)
+      .order('created_at', { ascending: false })
+      .limit(4)
+
+    if (error) throw error
+    return res.json({ jobs: data ?? [] })
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) })
+  }
+})
 
 // GET /api/jobs - List jobs with filters
 router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
@@ -31,13 +86,12 @@ router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
     const specialization = searchParams.get('specialization');
     const farmId = searchParams.get('farm_id');
     const status = searchParams.get('status') || 'all';
-    
-    // If status='all', use admin client to bypass RLS (since RLS only allows viewing 'active' jobs)
-    // Otherwise use regular client for RLS-protected queries
-    const supabase = status === 'all' 
-      ? getSupabaseAdminClient() 
+
+    // Single-job lookups are not cached (they're already fast and rarely repeated)
+    const supabase = status === 'all'
+      ? getSupabaseAdminClient()
       : getSupabaseClient();
-    
+
     if (id) {
       const singleResult = await supabase
         .from('jobs')
@@ -48,13 +102,20 @@ router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
       return res.json({ job: singleResult.data });
     }
 
-    let query = supabase
-      .from('jobs')
-      .select(jobListSelect);
+    const cacheKey = JSON.stringify({ status, location, jobType, specialization, farmId });
+    const cached = cacheGet(cacheKey);
+    if (cached) return res.json({ jobs: cached });
+
+    let query = supabase.from('jobs').select(jobListSelect);
 
     if (status && status !== 'all') {
       query = query.eq('status', status);
+    } else {
+      // Filter inactive jobs older than 24 hours at the DB level instead of in JS
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      query = query.or(`status.neq.inactive,and(status.eq.inactive,status_changed_at.gte.${cutoff})`)
     }
+
     if (location) query = query.eq('location', location);
     if (jobType) query = query.eq('job_type', jobType);
     if (specialization) query = query.eq('required_specialization', specialization);
@@ -62,20 +123,12 @@ router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
 
     query = query.order('created_at', { ascending: false });
 
-    let { data, error } = await query;
-
+    const { data, error } = await query;
     if (error) throw error;
 
-    if (status === 'all' || !status) {
-      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      data = (data || []).filter((job) => {
-        if (job.status !== 'inactive') return true;
-        if (!job.status_changed_at) return true;
-        const statusChangedAt = new Date(job.status_changed_at);
-        return statusChangedAt > twentyFourHoursAgo;
-      });
-    }
-    return res.json({ jobs: data || [] });
+    const jobs = data || [];
+    cacheSet(cacheKey, jobs);
+    return res.json({ jobs });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
   }
@@ -171,7 +224,7 @@ router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
       .single();
     
     if (error) throw error;
-    
+    cacheInvalidate();
     return res.status(201).json({ job });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
@@ -274,7 +327,7 @@ router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) =
       .single();
     
     if (error) throw error;
-    
+    cacheInvalidate();
     return res.json({ job: updated });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
@@ -317,6 +370,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       .eq('id', req.params.id);
 
     if (error) throw error;
+    cacheInvalidate();
     return res.status(204).send();
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });

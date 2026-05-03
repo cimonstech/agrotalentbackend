@@ -232,6 +232,27 @@ if (missingEnv.length > 0) {
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`)
   console.log(`Health check: http://localhost:${PORT}/health`)
+  startSupabaseKeepAlive()
 })
+
+// Ping Supabase every 2 minutes with a minimal query so the connection pool
+// never goes cold. Without this, the first request after an idle period takes
+// 3-8 seconds waiting for the TCP + TLS handshake to re-establish.
+function startSupabaseKeepAlive() {
+  const INTERVAL_MS = 2 * 60 * 1000 // 2 minutes
+  const ping = async () => {
+    try {
+      const { getSupabaseAdminClient } = await import('./lib/supabase.js')
+      await getSupabaseAdminClient()
+        .from('profiles')
+        .select('id')
+        .limit(1)
+        .maybeSingle()
+    } catch {
+      // Silently ignore — this is best-effort only
+    }
+  }
+  setInterval(() => { void ping() }, INTERVAL_MS)
+}
 
 export default app
