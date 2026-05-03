@@ -57,9 +57,9 @@ router.post('/', authenticate, async (req, res, next) => {
     const { generateR2Key, uploadToR2 } = await import('../services/r2-service.js');
     const { document_type, description } = req.body;
     
-    if (!['certificate', 'transcript', 'cv', 'nss_letter'].includes(document_type)) {
+    if (!['certificate', 'transcript', 'cv', 'nss_letter', 'job_image'].includes(document_type)) {
       return res.status(400).json({
-        error: 'Invalid document type. Must be certificate, transcript, cv, or nss_letter'
+        error: 'Invalid document type. Must be certificate, transcript, cv, nss_letter, or job_image'
       });
     }
 
