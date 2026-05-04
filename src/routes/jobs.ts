@@ -75,11 +75,15 @@ router.get('/public', async (req, res) => {
         salary_max,
         salary_currency,
         is_sourced_job,
+        is_platform_job,
+        created_at,
         image_url,
         required_specialization,
         profiles:farm_id (
           farm_name,
-          full_name
+          full_name,
+          role,
+          farm_logo_url
         )
       `,
         { count: 'exact' }
