@@ -50,11 +50,12 @@ router.get('/public', async (req, res) => {
 
     const search = (req.query.search as string | undefined)?.trim() ?? ''
     const type = (req.query.type as string | undefined)?.trim() ?? ''
+    const region = (req.query.region as string | undefined)?.trim() ?? ''
     const page = parseInt((req.query.page as string | undefined) ?? '1', 10)
     const limit = parseInt((req.query.limit as string | undefined) ?? '12', 10)
     const offset = (page - 1) * limit
 
-    const isFiltered = search.length > 0 || type.length > 0
+    const isFiltered = search.length > 0 || type.length > 0 || region.length > 0
 
     const cacheKey = `${page}:${limit}`
     const cached = publicJobsCache.get(cacheKey)
@@ -103,6 +104,10 @@ router.get('/public', async (req, res) => {
     // Job type filter
     if (type.length > 0) {
       query = query.eq('job_type', type)
+    }
+
+    if (region.length > 0) {
+      query = query.eq('location', region)
     }
 
     const { data, error, count } = await query
