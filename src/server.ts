@@ -104,23 +104,36 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
   },
 })
 
+// CSRF is now enforced at the Next.js proxy layer. Requests that arrive here
+// with x-internal-secret already passed Next.js's verifyCsrfToken check, so
+// running doubleCsrfProtection again (against a cookie set by the wrong origin)
+// would always fail. Fall back to doubleCsrfProtection only for any direct
+// browser → Express calls that don't carry the trusted header.
+function csrfOrTrusted(req: Request, res: Response, next: NextFunction) {
+  const internalSecret = process.env.INTERNAL_API_SECRET
+  if (internalSecret && req.headers['x-internal-secret'] === internalSecret) {
+    return next()
+  }
+  return doubleCsrfProtection(req, res, next)
+}
+
 app.get('/api/csrf-token', (req, res) => {
   res.json({ token: generateCsrfToken(req, res) })
 })
 
-app.use('/api/auth', doubleCsrfProtection)
-app.use('/api/applications', doubleCsrfProtection)
-app.use('/api/jobs', doubleCsrfProtection)
-app.use('/api/placements', doubleCsrfProtection)
-app.use('/api/payments', doubleCsrfProtection)
-app.use('/api/messages', doubleCsrfProtection)
-app.use('/api/profile', doubleCsrfProtection)
-app.use('/api/admin', doubleCsrfProtection)
-app.use('/api/documents', doubleCsrfProtection)
-app.use('/api/training', doubleCsrfProtection)
-app.use('/api/notices', doubleCsrfProtection)
-app.use('/api/contact', doubleCsrfProtection)
-app.use('/api/farms', doubleCsrfProtection)
+app.use('/api/auth', csrfOrTrusted)
+app.use('/api/applications', csrfOrTrusted)
+app.use('/api/jobs', csrfOrTrusted)
+app.use('/api/placements', csrfOrTrusted)
+app.use('/api/payments', csrfOrTrusted)
+app.use('/api/messages', csrfOrTrusted)
+app.use('/api/profile', csrfOrTrusted)
+app.use('/api/admin', csrfOrTrusted)
+app.use('/api/documents', csrfOrTrusted)
+app.use('/api/training', csrfOrTrusted)
+app.use('/api/notices', csrfOrTrusted)
+app.use('/api/contact', csrfOrTrusted)
+app.use('/api/farms', csrfOrTrusted)
 
 // Auth routes: strict
 app.use('/api/auth', authLimiter)
@@ -229,6 +242,7 @@ const REQUIRED_ENV = [
   'R2_BUCKET_NAME',
   'R2_PUBLIC_URL',
   'CSRF_SECRET',
+  'INTERNAL_API_SECRET',
   'FISH_AFRICA_APP_ID',
   'FISH_AFRICA_APP_SECRET',
 ]
