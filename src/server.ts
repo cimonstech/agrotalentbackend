@@ -20,12 +20,14 @@ import statsRoutes from './routes/stats.js'
 import adminRoutes from './routes/admin.js'
 import contactRoutes from './routes/contact.js'
 import farmsRoutes from './routes/farms.js'
+import analyticsRoutes from './routes/analytics.js'
 import testRouter from './routes/test.js'
 import placementsRoutes from './routes/placements.js'
 import paymentsRouter, { paymentsWebhookHandler } from './routes/payments.js'
 import cron from 'node-cron'
 import { enforceApplicationDeadlines } from './services/deadlineEnforcement.js'
 import { errorMessage } from './lib/errors.js'
+import { getSupabaseAdminClient } from './lib/supabase.js'
 import {
   csrfCookieSecure,
   csrfSameSite,
@@ -179,6 +181,7 @@ app.use('/api/stats', statsRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/contact', contactRoutes)
 app.use('/api/farms', farmsRoutes)
+app.use('/api/analytics', analyticsRoutes)
 app.use('/api/placements', placementsRoutes)
 app.use('/api/payments', paymentsRouter)
 
@@ -246,6 +249,23 @@ cron.schedule(
     )
     if (result.errors.length > 0) {
       console.error('[Cron] Errors:', result.errors)
+    }
+  },
+  {
+    timezone: 'Africa/Accra',
+  }
+)
+
+// Refresh job view counts every 15 minutes
+cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    try {
+      const supabase = getSupabaseAdminClient()
+      await supabase.rpc('refresh_job_view_counts')
+      console.log('[Cron] Job view counts refreshed')
+    } catch (err) {
+      console.error('[Cron] Failed to refresh job view counts:', err)
     }
   },
   {
