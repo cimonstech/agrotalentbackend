@@ -20,6 +20,7 @@ import statsRoutes from './routes/stats.js'
 import adminRoutes from './routes/admin.js'
 import contactRoutes from './routes/contact.js'
 import farmsRoutes from './routes/farms.js'
+import healthRouter from './routes/health.js'
 import analyticsRoutes from './routes/analytics.js'
 import testRouter from './routes/test.js'
 import placementsRoutes from './routes/placements.js'
@@ -120,6 +121,8 @@ function csrfOrTrusted(req: Request, res: Response, next: NextFunction) {
 app.get('/api/csrf-token', (req, res) => {
   res.json({ token: generateCsrfToken(req, res) })
 })
+
+app.use('/api/health', healthRouter)
 
 app.use('/api/auth', csrfOrTrusted)
 app.use('/api/applications', csrfOrTrusted)

@@ -128,6 +128,13 @@ router.get('/public', async (req, res) => {
       publicJobsCache.set(cacheKey, { data: payload, cachedAt: Date.now() })
     }
 
+    // Allow CDN and browsers to cache unfiltered results for 60 seconds
+    if (!isFiltered) {
+      res.set('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=30')
+    } else {
+      res.set('Cache-Control', 'no-store')
+    }
+
     return res.json(payload)
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) })
