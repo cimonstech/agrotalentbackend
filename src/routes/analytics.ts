@@ -1,23 +1,75 @@
 import express from 'express'
+import rateLimit from 'express-rate-limit'
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { authenticate } from '../middleware/auth.js'
 import type { AuthRequest } from '../types/auth.js'
 
+const GHANA_REGIONS = new Set([
+  'Greater Accra',
+  'Ashanti',
+  'Western',
+  'Eastern',
+  'Central',
+  'Volta',
+  'Northern',
+  'Upper East',
+  'Upper West',
+  'Brong-Ahafo',
+  'Western North',
+  'Ahafo',
+  'Bono',
+  'Bono East',
+  'Oti',
+  'Savannah',
+  'North East',
+  'Oti',
+])
+
+const ipViewCache = new Map<string, number>()
+
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60 * 1000
+  for (const [key, timestamp] of ipViewCache.entries()) {
+    if (timestamp < cutoff) ipViewCache.delete(key)
+  }
+}, 5 * 60 * 1000)
+
 const router = express.Router()
 
+const jobViewLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+  skip: (req) => {
+    return !!req.headers.authorization?.startsWith('Bearer ')
+  },
+})
+
 // POST /api/analytics/job-view - record a job view (public, optional auth)
-router.post('/job-view', async (req, res) => {
+router.post('/job-view', jobViewLimiter, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
-    const { job_id } = req.body as { job_id?: string }
+    const body = req.body as { job_id?: string; viewer_region?: string | null }
+    const { job_id } = body
 
     if (!job_id || typeof job_id !== 'string') {
       return res.status(400).json({ error: 'job_id is required' })
     }
 
+    let viewerRegionFromBody: string | null = null
+    const rawBodyRegion = body.viewer_region
+    if (typeof rawBodyRegion === 'string') {
+      viewerRegionFromBody = rawBodyRegion.trim() || null
+      if (viewerRegionFromBody && !GHANA_REGIONS.has(viewerRegionFromBody)) {
+        viewerRegionFromBody = null
+      }
+    }
+
     let viewerId: string | null = null
     let viewerRole = 'anonymous'
-    let viewerRegion: string | null = null
+    let viewerRegion: string | null = viewerRegionFromBody
 
     const authHeader = req.headers.authorization
     if (authHeader?.startsWith('Bearer ')) {
@@ -38,9 +90,13 @@ router.post('/job-view', async (req, res) => {
             preferred_region?: string | null
             farm_location?: string | null
           }
-          viewerRegion = p.preferred_region ?? p.farm_location ?? null
+          viewerRegion = p.preferred_region ?? p.farm_location ?? viewerRegion
         }
       }
+    }
+
+    if (viewerRegion && !GHANA_REGIONS.has(viewerRegion)) {
+      viewerRegion = null
     }
 
     if (viewerId) {
@@ -58,6 +114,15 @@ router.post('/job-view', async (req, res) => {
       if (recent && recent.length > 0) {
         return res.json({ recorded: false, reason: 'duplicate' })
       }
+    }
+
+    if (!viewerId) {
+      const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+      const ipKey = `anon_view_${job_id}_${ip}`
+      if (ipViewCache.has(ipKey)) {
+        return res.json({ recorded: false, reason: 'duplicate' })
+      }
+      ipViewCache.set(ipKey, Date.now())
     }
 
     const { error: insertError } = await supabase.from('job_views').insert({
