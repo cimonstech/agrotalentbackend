@@ -1,7 +1,7 @@
 import express, { type Response } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import type { AuthRequest } from '../types/auth.js';
-import { MatchingService } from '../services/matching-service.js';
+import { MatchingService, calculateMatchScore } from '../services/matching-service.js';
 import { errorMessage } from '../lib/errors.js';
 
 const router = express.Router();
@@ -69,11 +69,12 @@ router.get('/', authenticate, async (req, res: Response) => {
     }
 
     if (allRegions) {
-      const { data: jobs, error } = await supabase
-        .from('jobs')
-        .select('*')
-        .eq('status', 'active');
+      const [{ data: jobs, error }, { data: userProfile }] = await Promise.all([
+        supabase.from('jobs').select('*').eq('status', 'active'),
+        supabase.from('profiles').select('*').eq('id', user.id).single(),
+      ]);
       if (error) throw error;
+      if (!userProfile) return res.json({ matches: [] });
 
       const scored: Array<{
         applicant_id: string;
@@ -82,14 +83,12 @@ router.get('/', authenticate, async (req, res: Response) => {
         job: NonNullable<typeof jobs>[number];
       }> = [];
       for (const job of jobs || []) {
-        const score = await matching.calculateMatchScore(job.id, user.id);
+        const score = calculateMatchScore(
+          job as Record<string, unknown>,
+          userProfile as Record<string, unknown>
+        );
         if (score >= 30) {
-          scored.push({
-            applicant_id: user.id,
-            job_id: job.id,
-            match_score: score,
-            job
-          });
+          scored.push({ applicant_id: user.id, job_id: job.id, match_score: score, job });
         }
       }
       scored.sort((a, b) => b.match_score - a.match_score);

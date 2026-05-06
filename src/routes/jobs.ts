@@ -390,16 +390,10 @@ router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) =
 // DELETE /api/jobs/:id - Delete job (Farm own jobs or Admin any job)
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const supabase = req.supabase || getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
+    const role = (req as AuthRequest).user.role;
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', (req as AuthRequest).user.id)
-      .single();
-
-    if (!profile || (profile.role !== 'farm' && profile.role !== 'admin')) {
+    if (role !== 'farm' && role !== 'admin') {
       return res.status(403).json({ error: 'Only employers/farms and admins can delete jobs' });
     }
 
@@ -413,7 +407,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    if (profile.role === 'farm' && existingJob.farm_id !== (req as AuthRequest).user.id) {
+    if (role === 'farm' && existingJob.farm_id !== (req as AuthRequest).user.id) {
       return res.status(403).json({ error: 'You can only delete jobs you posted' });
     }
 

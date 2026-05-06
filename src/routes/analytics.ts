@@ -23,7 +23,6 @@ const GHANA_REGIONS = new Set([
   'Oti',
   'Savannah',
   'North East',
-  'Oti',
 ])
 
 const router = express.Router()
@@ -141,16 +140,11 @@ router.post('/job-view', jobViewLimiter, async (req, res) => {
 router.get('/job/:jobId', authenticate, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
+    const authReq = req as AuthRequest
     const { jobId } = req.params as { jobId: string }
-    const userId = (req as AuthRequest).user.id
+    const userId = authReq.user.id
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', userId)
-      .maybeSingle()
-
-    if ((profile as { role?: string | null } | null)?.role !== 'admin') {
+    if (authReq.user.role !== 'admin') {
       const { data: job } = await supabase
         .from('jobs')
         .select('farm_id')
@@ -268,15 +262,9 @@ router.get('/farm-overview', authenticate, async (req, res) => {
 router.get('/admin-overview', authenticate, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
-    const userId = (req as AuthRequest).user.id
+    const authReq = req as AuthRequest
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', userId)
-      .maybeSingle()
-
-    if ((profile as { role?: string | null } | null)?.role !== 'admin') {
+    if (authReq.user.role !== 'admin') {
       return res.status(403).json({ error: 'Admin only' })
     }
 
@@ -325,7 +313,9 @@ router.get('/admin-overview', authenticate, async (req, res) => {
     const sevenDaysAgo = new Date(
       Date.now() - 7 * 24 * 60 * 60 * 1000
     ).toISOString()
-    const [totalViewsResult, views7dResult] = await Promise.all([
+
+    // Fetch total/7d view counts and zero-view jobs in parallel (all independent)
+    const [totalViewsResult, views7dResult, zeroViewJobsResult] = await Promise.all([
       supabase
         .from('job_views')
         .select('id', { count: 'exact', head: true }),
@@ -333,45 +323,30 @@ router.get('/admin-overview', authenticate, async (req, res) => {
         .from('job_views')
         .select('id', { count: 'exact', head: true })
         .gte('viewed_at', sevenDaysAgo),
+      supabase
+        .from('jobs')
+        .select('id, title, location, created_at, profiles:farm_id(farm_name, full_name), job_view_counts!left(job_id)')
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .lt('created_at', sevenDaysAgo)
+        .is('job_view_counts.job_id', null)
+        .limit(20),
     ])
 
     const totalViews = totalViewsResult.count ?? 0
     const views7d = views7dResult.count ?? 0
 
-    const sevenDaysAgoDate = new Date(
-      Date.now() - 7 * 24 * 60 * 60 * 1000
-    ).toISOString()
-    const zeroViewJobs: unknown[] = []
-    const [activeJobsResult, viewedIdsResult] = await Promise.all([
-      supabase
-        .from('jobs')
-        .select('id, title, location, created_at, profiles:farm_id(farm_name, full_name)')
-        .eq('status', 'active')
-        .is('deleted_at', null)
-        .lt('created_at', sevenDaysAgoDate),
-      supabase
-        .from('job_view_counts')
-        .select('job_id')
-        .gt('total_views', 0),
-    ])
-
-    const activeJobs = activeJobsResult.data ?? []
-    const viewedSet = new Set((viewedIdsResult.data ?? []).map((v: any) => v.job_id as string))
-    if (activeJobs.length > 0) {
-      for (const job of activeJobs as any[]) {
-        if (!viewedSet.has(job.id as string)) {
-          const farm = job.profiles
-          const farmObj = Array.isArray(farm) ? farm[0] : farm
-          zeroViewJobs.push({
-            id: job.id,
-            title: job.title,
-            location: job.location,
-            created_at: job.created_at,
-            farm_name: farmObj?.farm_name ?? farmObj?.full_name ?? 'Unknown',
-          })
-        }
+    const zeroViewJobs = ((zeroViewJobsResult.data ?? []) as any[]).map((job) => {
+      const farm = job?.profiles
+      const farmObj = Array.isArray(farm) ? farm[0] : farm
+      return {
+        id: job.id,
+        title: job.title,
+        location: job.location,
+        created_at: job.created_at,
+        farm_name: farmObj?.farm_name ?? farmObj?.full_name ?? 'Unknown',
       }
-    }
+    })
 
     return res.json({
       total_views: totalViews,

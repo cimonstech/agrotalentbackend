@@ -80,19 +80,13 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
       });
     }
     
-    // Get user profile
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', (req as AuthRequest).user.id)
-      .single();
-    
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' });
+    const role = (req as AuthRequest).user.role;
+    if (!role) {
+      return res.status(403).json({ error: 'Role not determined' });
     }
-    
+
     let conversationId = conversation_id;
-    
+
     // Create conversation if it doesn't exist
     if (!conversationId) {
       if (!recipient_id || !job_id) {
@@ -100,9 +94,9 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
           error: 'recipient_id and job_id required for new conversation'
         });
       }
-      
-      const farmId = profile.role === 'farm' ? (req as AuthRequest).user.id : recipient_id;
-      const graduateId = profile.role === 'farm' ? recipient_id : (req as AuthRequest).user.id;
+
+      const farmId = role === 'farm' ? (req as AuthRequest).user.id : recipient_id;
+      const graduateId = role === 'farm' ? recipient_id : (req as AuthRequest).user.id;
       
       // Check if conversation already exists
       const { data: existing } = await supabase
@@ -168,21 +162,15 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
           user_id: recipientId,
           type: 'application_received',
           title: 'New Message',
-          message: `You have a new message from ${profile.role === 'farm' ? 'a farm' : 'a graduate'}`,
+          message: `You have a new message from ${role === 'farm' ? 'a farm' : 'a graduate'}`,
           link: `/dashboard/messages/${conversationId}`
         });
     }
 
-    const { data: conversationForEmail } = await supabase
-      .from('conversations')
-      .select('farm_id, graduate_id')
-      .eq('id', conversationId)
-      .maybeSingle()
-
-    if (conversationForEmail) {
-      const recipientProfileId = conversationForEmail.farm_id === (req as AuthRequest).user.id
-        ? conversationForEmail.graduate_id
-        : conversationForEmail.farm_id
+    if (conversation) {
+      const recipientProfileId = conversation.farm_id === (req as AuthRequest).user.id
+        ? conversation.graduate_id
+        : conversation.farm_id
       const { data: recipientProfile } = await supabase
         .from('profiles')
         .select('email, full_name, role')

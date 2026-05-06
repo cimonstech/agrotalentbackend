@@ -1,6 +1,6 @@
 import express from 'express';
 import { getSupabaseAdminClient, getSupabaseClient } from '../lib/supabase.js';
-import { authenticate, requireAuth } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import type { AuthRequest } from '../types/auth.js';
 import { errorMessage } from '../lib/errors.js';
 import { sendVerificationApprovedSms, sendApplicationStatusSms } from '../services/sms-service.js';
@@ -82,7 +82,7 @@ router.patch('/', authenticate, async (req, res) => {
   }
 });
 
-router.post('/send-sms', requireAuth, async (req, res) => {
+router.post('/send-sms', requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
     const { user_id, type, job_title, status } = req.body as { user_id?: string; type?: string; job_title?: string; status?: string }
