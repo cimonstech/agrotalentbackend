@@ -261,6 +261,7 @@ router.post('/signup', authLimiter, validate(signUpSchema), async (req, res) => 
 router.post('/signin', authLimiter, validate(signInSchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
+    const supabaseAdmin = getSupabaseAdminClient();
     const { email, password } = req.body;
 
     if (!email || !password) {
@@ -287,7 +288,6 @@ router.post('/signin', authLimiter, validate(signInSchema), async (req, res) => 
       if (authError.message.includes('Email not confirmed')) {
         // For admin users, bypass email verification requirement
         // First, try to get the user profile to check if they're an admin
-        const supabaseAdmin = getSupabaseAdminClient();
         const { data: profileCheck } = await supabaseAdmin
           .from('profiles')
           .select('role')
@@ -342,7 +342,6 @@ router.post('/signin', authLimiter, validate(signInSchema), async (req, res) => 
     }
 
     // Get user profile
-    const supabaseAdmin = getSupabaseAdminClient();
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('*')

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import type { AdminAuthRequest } from '../types/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
@@ -91,7 +91,7 @@ async function createNoticeAndNotify(
 }
 
 // GET /api/admin/trainings - list sessions
-router.get('/trainings', requireAdmin, async (req, res) => {
+router.get('/trainings', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const category = req.query.category;
@@ -137,7 +137,7 @@ router.get('/trainings', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/trainings - create session
-router.post('/trainings', requireAdmin, validate(createTrainingSchema), async (req, res) => {
+router.post('/trainings', authenticate, requireAdmin, validate(createTrainingSchema), async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const {
@@ -259,7 +259,7 @@ router.post('/trainings', requireAdmin, validate(createTrainingSchema), async (r
 });
 
 // GET /api/admin/trainings/:id - session + participants
-router.get('/trainings/:id', requireAdmin, async (req, res) => {
+router.get('/trainings/:id', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
 
@@ -303,7 +303,7 @@ router.get('/trainings/:id', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/trainings/:id/assign - assign participants (selected IDs OR by filters)
-router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
+router.post('/trainings/:id/assign', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const { userIds, role, region, search, notify_email, notify_sms } = req.body || {};
@@ -473,7 +473,7 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
 });
 
 // PUT /api/admin/trainings/:id/attendance - mark attendance in bulk
-router.put('/trainings/:id/attendance', requireAdmin, async (req, res) => {
+router.put('/trainings/:id/attendance', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const { updates } = req.body || {};

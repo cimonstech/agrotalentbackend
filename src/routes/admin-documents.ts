@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import type { AdminAuthRequest } from '../types/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
@@ -11,7 +11,7 @@ import { fireAndForget } from '../lib/notify.js'
 const router = Router();
 
 // GET /api/admin/documents - List documents for verification
-router.get('/documents', requireAdmin, async (req, res) => {
+router.get('/documents', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const documentType = req.query.document_type;
@@ -70,7 +70,7 @@ router.get('/documents', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/documents/:id/approve - Approve document
-router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
+router.post('/documents/:id/approve', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { data: document, error } = await supabaseAdmin
@@ -127,7 +127,7 @@ router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/documents/:id/reject - Reject document
-router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
+router.post('/documents/:id/reject', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { reason } = req.body || {};

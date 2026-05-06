@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import type { AdminAuthRequest } from '../types/auth.js';
 import { errorMessage } from '../lib/errors.js'
 
@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
 };
 
 // GET /api/admin/settings
-router.get('/settings', requireAdmin, async (req, res) => {
+router.get('/settings', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { data, error } = await supabaseAdmin
@@ -39,7 +39,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
 });
 
 // PUT /api/admin/settings
-router.put('/settings', requireAdmin, async (req, res) => {
+router.put('/settings', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const incoming = req.body || {};

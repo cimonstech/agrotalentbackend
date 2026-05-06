@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
 
 const router = Router();
 
 // GET /api/admin/reports - Generate reports
-router.get('/reports', requireAdmin, async (req, res) => {
+router.get('/reports', authenticate, requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
@@ -127,7 +127,7 @@ router.get('/reports', requireAdmin, async (req, res) => {
 });
 
 // GET /api/admin/contact - Get contact submissions
-router.get('/contact', requireAdmin, async (req, res) => {
+router.get('/contact', authenticate, requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();
@@ -158,7 +158,7 @@ router.get('/contact', requireAdmin, async (req, res) => {
 });
 
 // GET /api/admin/payments - List payments (Admin only)
-router.get('/payments', requireAdmin, async (req, res) => {
+router.get('/payments', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient();
     const status = queryParamToString(req.query.status);

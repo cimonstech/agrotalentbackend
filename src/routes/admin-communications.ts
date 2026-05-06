@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { uploadSingleImage } from '../middleware/upload.js';
 import {
   sendNoticePostedEmail,
@@ -69,7 +69,7 @@ function greetingNameForEmail(row: ProfileTargetRow): string {
 }
 
 // GET /api/admin/communications/logs - View sent message logs
-router.get('/communications/logs', requireAdmin, async (req, res) => {
+router.get('/communications/logs', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const limit = parseInt(queryParamToString(req.query.limit) || '50', 10);
@@ -115,7 +115,7 @@ function normalizeCommunicationRecipientsKey(raw: unknown): string {
 }
 
 // POST /api/admin/communications/send - Send bulk or single message
-router.post('/communications/send', requireAdmin, async (req, res) => {
+router.post('/communications/send', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const {
@@ -407,7 +407,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
 });
 
 // GET /api/admin/notices - List all notices (admin)
-router.get('/notices', requireAdmin, async (req, res) => {
+router.get('/notices', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { data, error } = await supabaseAdmin
@@ -428,7 +428,7 @@ router.get('/notices', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/notices/upload-image - Upload a picture for a notice (admin)
-router.post('/notices/upload-image', requireAdmin, (req, res, next) => {
+router.post('/notices/upload-image', authenticate, requireAdmin, (req, res, next) => {
   uploadSingleImage('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Invalid file' });
     next();
@@ -498,7 +498,7 @@ async function createNoticeAndNotify(
 }
 
 // POST /api/admin/notices - Create notice and notify all non-admin users in audience
-router.post('/notices', requireAdmin, validate(createNoticeSchema), async (req, res) => {
+router.post('/notices', authenticate, requireAdmin, validate(createNoticeSchema), async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { title, body_html, link, audience, attachments } = req.body || {};

@@ -124,19 +124,7 @@ app.get('/api/csrf-token', (req, res) => {
 
 app.use('/api/health', healthRouter)
 
-app.use('/api/auth', csrfOrTrusted)
-app.use('/api/applications', csrfOrTrusted)
-app.use('/api/jobs', csrfOrTrusted)
-app.use('/api/placements', csrfOrTrusted)
-app.use('/api/payments', csrfOrTrusted)
-app.use('/api/messages', csrfOrTrusted)
-app.use('/api/profile', csrfOrTrusted)
-app.use('/api/admin', csrfOrTrusted)
-app.use('/api/documents', csrfOrTrusted)
-app.use('/api/training', csrfOrTrusted)
-app.use('/api/notices', csrfOrTrusted)
-app.use('/api/contact', csrfOrTrusted)
-app.use('/api/farms', csrfOrTrusted)
+app.use('/api', csrfOrTrusted)
 
 // Auth routes: strict
 app.use('/api/auth', authLimiter)
@@ -161,18 +149,6 @@ app.use('/api/training', writeLimiter)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    'Missing Supabase configuration. Please set SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env'
-  )
-}
-
-if (!supabaseServiceKey) {
-  console.warn(
-    'SUPABASE_SERVICE_ROLE_KEY not set. Admin operations may not work.'
-  )
-}
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })

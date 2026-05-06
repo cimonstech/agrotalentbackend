@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { enforceApplicationDeadlines } from '../services/deadlineEnforcement.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
@@ -8,7 +8,7 @@ import { errorMessage } from '../lib/errors.js'
 const router = Router();
 
 // GET /api/admin/jobs - List all jobs from all employers
-router.get('/jobs', requireAdmin, async (req, res) => {
+router.get('/jobs', authenticate, requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS and see all jobs
     const supabaseAdmin = getSupabaseAdminClient();
@@ -75,7 +75,7 @@ router.get('/jobs', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/jobs/enforce-deadlines', requireAdmin, async (_req, res) => {
+router.post('/jobs/enforce-deadlines', authenticate, requireAdmin, async (_req, res) => {
   try {
     const result = await enforceApplicationDeadlines();
     return res.json({
@@ -92,7 +92,7 @@ router.post('/jobs/enforce-deadlines', requireAdmin, async (_req, res) => {
 });
 
 // DELETE /api/admin/jobs - Delete all jobs (Admin only)
-router.delete('/jobs', requireAdmin, async (req, res) => {
+router.delete('/jobs', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { error } = await supabaseAdmin.from('jobs').delete().neq('id', '00000000-0000-0000-0000-000000000000');

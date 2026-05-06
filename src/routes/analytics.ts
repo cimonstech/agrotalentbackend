@@ -225,15 +225,17 @@ router.get('/farm-overview', authenticate, async (req, res) => {
 
     const jobIds = (jobs as Array<{ id: string }>).map((j) => j.id)
 
-    const { data: viewCounts } = await supabase
-      .from('job_view_counts')
-      .select('job_id, total_views, unique_views, views_30d, views_7d')
-      .in('job_id', jobIds)
+    const [viewCountsResult, appCountsResult] = await Promise.all([
+      supabase
+        .from('job_view_counts')
+        .select('job_id, total_views, unique_views, views_30d, views_7d')
+        .in('job_id', jobIds),
+      supabase
+        .rpc('get_application_counts_by_jobs', { p_job_ids: jobIds }),
+    ])
 
-    const { data: appCounts } = await supabase.rpc(
-      'get_application_counts_by_jobs',
-      { p_job_ids: jobIds }
-    )
+    const viewCounts = viewCountsResult.data
+    const appCounts = appCountsResult.data
 
     const viewMap = new Map(
       (viewCounts ?? []).map((v: any) => [v.job_id as string, v])
@@ -287,17 +289,19 @@ router.get('/admin-overview', authenticate, async (req, res) => {
     let enrichedTopJobs: unknown[] = []
     if (topJobs && topJobs.length > 0) {
       const jobIds = (topJobs as Array<{ job_id: string }>).map((t) => t.job_id)
-      const { data: jobDetails } = await supabase
-        .from('jobs')
-        .select('id, title, location, status, profiles:farm_id(farm_name, full_name)')
-        .in('id', jobIds)
+      const [jobDetailsResult, appCountsResult] = await Promise.all([
+        supabase
+          .from('jobs')
+          .select('id, title, location, status, profiles:farm_id(farm_name, full_name)')
+          .in('id', jobIds),
+        supabase
+          .rpc('get_application_counts_by_jobs', { p_job_ids: jobIds }),
+      ])
+
+      const jobDetails = jobDetailsResult.data
+      const appCounts = appCountsResult.data
 
       const jobMap = new Map((jobDetails ?? []).map((j: any) => [j.id as string, j]))
-
-      const { data: appCounts } = await supabase.rpc(
-        'get_application_counts_by_jobs',
-        { p_job_ids: jobIds }
-      )
 
       const appMap = new Map(
         (appCounts ?? []).map((a: any) => [a.job_id as string, Number(a.count) ?? 0])
@@ -318,38 +322,42 @@ router.get('/admin-overview', authenticate, async (req, res) => {
       })
     }
 
-    const { count: totalViews } = await supabase
-      .from('job_views')
-      .select('id', { count: 'exact', head: true })
-
     const sevenDaysAgo = new Date(
       Date.now() - 7 * 24 * 60 * 60 * 1000
     ).toISOString()
-    const { count: views7d } = await supabase
-      .from('job_views')
-      .select('id', { count: 'exact', head: true })
-      .gte('viewed_at', sevenDaysAgo)
+    const [totalViewsResult, views7dResult] = await Promise.all([
+      supabase
+        .from('job_views')
+        .select('id', { count: 'exact', head: true }),
+      supabase
+        .from('job_views')
+        .select('id', { count: 'exact', head: true })
+        .gte('viewed_at', sevenDaysAgo),
+    ])
+
+    const totalViews = totalViewsResult.count ?? 0
+    const views7d = views7dResult.count ?? 0
 
     const sevenDaysAgoDate = new Date(
       Date.now() - 7 * 24 * 60 * 60 * 1000
     ).toISOString()
-    const { data: activeJobs } = await supabase
-      .from('jobs')
-      .select('id, title, location, created_at, profiles:farm_id(farm_name, full_name)')
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .lt('created_at', sevenDaysAgoDate)
-
     const zeroViewJobs: unknown[] = []
-    if (activeJobs && activeJobs.length > 0) {
-      const activeIds = (activeJobs as Array<{ id: string }>).map((j) => j.id)
-      const { data: viewedIds } = await supabase
+    const [activeJobsResult, viewedIdsResult] = await Promise.all([
+      supabase
+        .from('jobs')
+        .select('id, title, location, created_at, profiles:farm_id(farm_name, full_name)')
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .lt('created_at', sevenDaysAgoDate),
+      supabase
         .from('job_view_counts')
         .select('job_id')
-        .in('job_id', activeIds)
-        .gt('total_views', 0)
+        .gt('total_views', 0),
+    ])
 
-      const viewedSet = new Set((viewedIds ?? []).map((v: any) => v.job_id as string))
+    const activeJobs = activeJobsResult.data ?? []
+    const viewedSet = new Set((viewedIdsResult.data ?? []).map((v: any) => v.job_id as string))
+    if (activeJobs.length > 0) {
       for (const job of activeJobs as any[]) {
         if (!viewedSet.has(job.id as string)) {
           const farm = job.profiles
@@ -366,8 +374,8 @@ router.get('/admin-overview', authenticate, async (req, res) => {
     }
 
     return res.json({
-      total_views: totalViews ?? 0,
-      views_7d: views7d ?? 0,
+      total_views: totalViews,
+      views_7d: views7d,
       top_jobs: enrichedTopJobs,
       zero_view_jobs: zeroViewJobs,
     })

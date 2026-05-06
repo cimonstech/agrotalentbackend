@@ -391,8 +391,7 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
       .eq('id', job_id);
 
     fireAndForget(async () => {
-      const admin = getSupabaseAdminClient();
-      const { data: farm } = await admin
+      const { data: farm } = await supabaseAdmin
         .from('profiles')
         .select('email, phone, farm_name, full_name')
         .eq('id', jobFull.farm_id)
@@ -425,14 +424,14 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
       }
 
       if (jobFull.is_platform_job) {
-        const { data: admins } = await admin
+        const { data: admins } = await supabaseAdmin
           .from('profiles')
           .select('id, email, full_name, phone')
           .eq('role', 'admin')
         for (const adminUser of admins ?? []) {
           void (async () => {
             try {
-              await admin
+              await supabaseAdmin
                 .from('notifications')
                 .insert({
                   user_id: adminUser.id,
@@ -704,13 +703,12 @@ router.patch(
 
     if (typeof status === 'string' && status.length > 0) {
       fireAndForget(async () => {
-        const admin = getSupabaseAdminClient();
-        const { data: applicantProfile } = await admin
+        const { data: applicantProfile } = await supabaseAdmin
           .from('profiles')
           .select('email, phone, full_name')
           .eq('id', application.applicant_id)
           .single();
-        const { data: jobRow } = await admin
+        const { data: jobRow } = await supabaseAdmin
           .from('jobs')
           .select('title')
           .eq('id', application.job_id)

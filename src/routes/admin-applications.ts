@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { getSupabaseAdminClient } from '../lib/supabase.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
 
 const router = Router();
 
 // GET /api/admin/applications - List all applications
-router.get('/applications', requireAdmin, async (req, res) => {
+router.get('/applications', authenticate, requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabase = getSupabaseAdminClient();

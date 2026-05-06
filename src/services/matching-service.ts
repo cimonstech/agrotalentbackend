@@ -161,7 +161,10 @@ export class MatchingService {
     const matches: MatchResult[] = [];
 
     for (const applicant of applicants) {
-      const score = await this.calculateMatchScore(jobId, applicant.id);
+      const score = calculateMatchScore(
+        job as Record<string, unknown>,
+        applicant as Record<string, unknown>
+      )
 
       if (score > 0) {
         matches.push({
@@ -209,7 +212,10 @@ export class MatchingService {
     const matches: MatchResult[] = [];
 
     for (const job of jobs) {
-      const score = await this.calculateMatchScore(job.id, applicantId);
+      const score = calculateMatchScore(
+        job as Record<string, unknown>,
+        applicant as Record<string, unknown>
+      )
 
       if (score >= 30) {
         matches.push({

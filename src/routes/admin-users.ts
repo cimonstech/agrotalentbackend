@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { Router } from 'express'
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js'
-import { requireAdmin } from '../middleware/auth.js'
+import { authenticate, requireAdmin } from '../middleware/auth.js'
 import type { AdminAuthRequest } from '../types/auth.js'
 import { queryParamToString } from '../lib/query.js'
 import { errorMessage } from '../lib/errors.js'
@@ -13,7 +13,7 @@ import { fireAndForget } from '../lib/notify.js'
 const router = Router()
 
 // GET /api/admin/users - List all users
-router.get('/users', requireAdmin, async (req, res) => {
+router.get('/users', authenticate, requireAdmin, async (req, res) => {
   try {
     // Use admin client to bypass RLS and see all users
     const supabaseAdmin = getSupabaseAdminClient();
@@ -66,7 +66,7 @@ router.get('/users', requireAdmin, async (req, res) => {
 });
 
 // GET /api/admin/users/:id - Get single user details
-router.get('/users/:id', requireAdmin, async (req, res) => {
+router.get('/users/:id', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     
@@ -179,7 +179,7 @@ router.get('/users/:id', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/users/create - Create user
-router.post('/users/create', requireAdmin, validate(createUserSchema), async (req, res) => {
+router.post('/users/create', authenticate, requireAdmin, validate(createUserSchema), async (req, res) => {
   try {
     const supabase = getSupabaseClient();
     const supabaseAdmin = getSupabaseAdminClient();
@@ -287,7 +287,7 @@ router.post('/users/create', requireAdmin, validate(createUserSchema), async (re
 
 // POST /api/admin/ensure-unknown-farm - Get or create the "Farm (unknown)" placeholder for admin job posting
 const UNKNOWN_FARM_EMAIL = 'unknown-farm@system.agrotalenthub.internal';
-router.post('/ensure-unknown-farm', requireAdmin, async (req, res) => {
+router.post('/ensure-unknown-farm', authenticate, requireAdmin, async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdminClient();
     const { data: existing } = await supabaseAdmin
@@ -336,7 +336,7 @@ router.post('/ensure-unknown-farm', requireAdmin, async (req, res) => {
 });
 
 // POST /api/admin/verify/:id - Verify user
-router.post('/verify/:id', requireAdmin, validate(verifyUserSchema), async (req, res) => {
+router.post('/verify/:id', authenticate, requireAdmin, validate(verifyUserSchema), async (req, res) => {
   try {
     // Use admin client to bypass RLS
     const supabaseAdmin = getSupabaseAdminClient();
