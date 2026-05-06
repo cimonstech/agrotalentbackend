@@ -52,7 +52,7 @@ router.post('/', publicFormLimiter, validate(contactSchema), async (req, res) =>
           },
           body: JSON.stringify({
             from: NOTIFICATION_EMAIL,
-            to: 'info@agrotalenthub.com',
+            to: 'agrotalenthub@gmail.com',
             replyTo: email,
             subject: `Contact Form: ${subject || 'General Inquiry'}`,
             html: `
