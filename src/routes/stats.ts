@@ -1,12 +1,17 @@
 import express from 'express';
 import { getSupabaseClient } from '../lib/supabase.js';
 import { errorMessage } from '../lib/errors.js';
+import { cacheGet, cacheSet } from '../lib/redis.js'
 
 const router = express.Router();
 
 // GET /api/stats - Get platform statistics (public)
 router.get('/', async (req, res) => {
   try {
+    const cacheKey = 'platform:stats'
+    const cached = await cacheGet(cacheKey)
+    if (cached) return res.json(cached)
+
     const supabase = getSupabaseClient();
     // Get verified graduates count
     const { count: graduatesCount } = await supabase
@@ -76,16 +81,19 @@ router.get('/', async (req, res) => {
       }
     }
     
-    return res.json({
+    const statsPayload = {
       stats: {
         verified_graduates: graduatesCount || 0,
         partner_farms: farmsCount || 0,
         active_jobs: jobsCount || 0,
         successful_placements: placementsCount || 0,
         placement_rate: placementRate,
-        avg_match_time_days: avgMatchTime
-      }
-    });
+        avg_match_time_days: avgMatchTime,
+      },
+    }
+
+    await cacheSet(cacheKey, statsPayload, 300)
+    return res.json(statsPayload)
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
   }

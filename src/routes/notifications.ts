@@ -4,45 +4,24 @@ import { authenticate, requireAuth } from '../middleware/auth.js';
 import type { AuthRequest } from '../types/auth.js';
 import { errorMessage } from '../lib/errors.js';
 import { sendVerificationApprovedSms, sendApplicationStatusSms } from '../services/sms-service.js';
+import { cacheDel, cacheGet, cacheSet } from '../lib/redis.js'
 
 const router = express.Router();
 
-// --- per-user notification cache ---
-type NotifCacheEntry = { data: unknown; expiresAt: number }
-const notifCache = new Map<string, NotifCacheEntry>()
-const NOTIF_TTL_MS = 20_000 // 20 seconds — dashboard polls every 15s, one free hit then cache
-
-function notifCacheGet(key: string): unknown | null {
-  const e = notifCache.get(key)
-  if (!e) return null
-  if (Date.now() > e.expiresAt) { notifCache.delete(key); return null }
-  return e.data
-}
-function notifCacheSet(key: string, data: unknown) {
-  notifCache.set(key, { data, expiresAt: Date.now() + NOTIF_TTL_MS })
-}
-export function invalidateNotifCache(userId: string) {
-  // Delete both full and unread-only variants for this user
-  notifCache.delete(`${userId}:all`)
-  notifCache.delete(`${userId}:unread`)
-}
-// -----------------------------------
-
 router.get('/', authenticate, async (req, res) => {
   try {
-    const uid = (req as AuthRequest).user.id;
+    const userId = (req as AuthRequest).user.id;
     const unreadOnly = req.query.unread === 'true';
-    const cacheKey = `${uid}:${unreadOnly ? 'unread' : 'all'}`;
-
-    const cached = notifCacheGet(cacheKey);
-    if (cached) return res.json({ notifications: cached });
+    const cacheKey = `notifications:${userId}:${unreadOnly ? 'unread' : 'all'}`
+    const cached = await cacheGet<{ notifications: unknown }>(cacheKey)
+    if (cached) return res.json(cached)
 
     const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
 
     let query = supabase
       .from('notifications')
       .select('id, type, title, message, link, read, notice_id, created_at')
-      .eq('user_id', uid)
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(20);
 
@@ -55,8 +34,9 @@ router.get('/', authenticate, async (req, res) => {
     if (error) throw error;
 
     const notifications = data || [];
-    notifCacheSet(cacheKey, notifications);
-    return res.json({ notifications });
+    const responsePayload = { notifications }
+    await cacheSet(cacheKey, responsePayload, 30)
+    return res.json(responsePayload)
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
   }
@@ -67,29 +47,31 @@ router.patch('/', authenticate, async (req, res) => {
     const supabase = (req as AuthRequest).supabase ?? getSupabaseClient();
     const { notification_ids, mark_all_read } = req.body;
 
-    const uid = (req as AuthRequest).user.id;
+    const userId = (req as AuthRequest).user.id;
 
     if (mark_all_read) {
       const { error } = await supabase
         .from('notifications')
         .update({ read: true })
-        .eq('user_id', uid)
+        .eq('user_id', userId)
         .eq('read', false);
 
       if (error) throw error;
 
-      invalidateNotifCache(uid);
+      await cacheDel(`notifications:${userId}:all`)
+      await cacheDel(`notifications:${userId}:unread`)
       return res.json({ message: 'All notifications marked as read' });
     } else if (notification_ids && Array.isArray(notification_ids)) {
       const { error } = await supabase
         .from('notifications')
         .update({ read: true })
         .in('id', notification_ids)
-        .eq('user_id', uid);
+        .eq('user_id', userId);
 
       if (error) throw error;
 
-      invalidateNotifCache(uid);
+      await cacheDel(`notifications:${userId}:all`)
+      await cacheDel(`notifications:${userId}:unread`)
       return res.json({ message: 'Notifications marked as read' });
     } else {
       return res.status(400).json({ error: 'Invalid request' });

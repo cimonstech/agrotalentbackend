@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { getSupabaseAdminClient } from '../lib/supabase.js'
+import { cacheGet, cacheSet } from '../lib/redis.js'
 
 const router = Router()
 
@@ -45,6 +46,21 @@ router.get('/', async (_req, res) => {
     }
   } catch (err) {
     checks.r2 = {
+      status: 'unhealthy',
+      error: err instanceof Error ? err.message : 'Unknown error',
+    }
+  }
+
+  // Check Redis connectivity
+  try {
+    const redisStart = Date.now()
+    await cacheSet('health:ping', 'pong', 10)
+    const pong = await cacheGet<string>('health:ping')
+    checks.redis = pong === 'pong'
+      ? { status: 'healthy', latencyMs: Date.now() - redisStart }
+      : { status: 'unhealthy', error: 'Ping/pong mismatch' }
+  } catch (err) {
+    checks.redis = {
       status: 'unhealthy',
       error: err instanceof Error ? err.message : 'Unknown error',
     }

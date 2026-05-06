@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit'
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { authenticate } from '../middleware/auth.js'
 import type { AuthRequest } from '../types/auth.js'
+import { cacheGet, cacheSet } from '../lib/redis.js'
 
 const GHANA_REGIONS = new Set([
   'Greater Accra',
@@ -24,15 +25,6 @@ const GHANA_REGIONS = new Set([
   'North East',
   'Oti',
 ])
-
-const ipViewCache = new Map<string, number>()
-
-setInterval(() => {
-  const cutoff = Date.now() - 30 * 60 * 1000
-  for (const [key, timestamp] of ipViewCache.entries()) {
-    if (timestamp < cutoff) ipViewCache.delete(key)
-  }
-}, 5 * 60 * 1000)
 
 const router = express.Router()
 
@@ -118,11 +110,12 @@ router.post('/job-view', jobViewLimiter, async (req, res) => {
 
     if (!viewerId) {
       const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
-      const ipKey = `anon_view_${job_id}_${ip}`
-      if (ipViewCache.has(ipKey)) {
+      const ipKey = `anon_view:${job_id}:${ip}`
+      const seen = await cacheGet<string>(ipKey)
+      if (seen) {
         return res.json({ recorded: false, reason: 'duplicate' })
       }
-      ipViewCache.set(ipKey, Date.now())
+      await cacheSet(ipKey, '1', 30 * 60)
     }
 
     const { error: insertError } = await supabase.from('job_views').insert({

@@ -4,31 +4,13 @@ import { authenticate } from '../middleware/auth.js'
 import type { AuthRequest } from '../types/auth.js'
 import { errorMessage } from '../lib/errors.js'
 import { validate, validateQuery } from '../lib/validate.js'
+import { cacheDel, cacheDelPattern, cacheGet, cacheSet } from '../lib/redis.js'
 import {
   createJobSchema,
   updateJobSchema,
   jobsListQuerySchema,
 } from '../lib/schemas.js'
-const router = express.Router();
-
-// --- simple in-memory cache for job list queries ---
-type CacheEntry = { data: unknown; expiresAt: number }
-const listCache = new Map<string, CacheEntry>()
-const JOB_LIST_CACHE_TTL_MS = 60_000 // 60 seconds
-
-function cacheGet(key: string): unknown | null {
-  const entry = listCache.get(key)
-  if (!entry) return null
-  if (Date.now() > entry.expiresAt) { listCache.delete(key); return null }
-  return entry.data
-}
-
-function cacheSet(key: string, data: unknown): void {
-  listCache.set(key, { data, expiresAt: Date.now() + JOB_LIST_CACHE_TTL_MS })
-}
-
-function cacheInvalidate(): void { listCache.clear() }
-// ---------------------------------------------------
+const router = express.Router()
 
 const jobListSelect = `
         *,
@@ -39,10 +21,6 @@ const jobListSelect = `
           farm_type
         )
       `;
-
-// Simple in-memory cache for the unfiltered public jobs list (keyed by page:limit)
-const publicJobsCache = new Map<string, { data: unknown; cachedAt: number }>()
-const CACHE_TTL_MS = 60 * 1000 // 60 seconds
 
 router.get('/public', async (req, res) => {
   try {
@@ -57,10 +35,18 @@ router.get('/public', async (req, res) => {
 
     const isFiltered = search.length > 0 || type.length > 0 || region.length > 0
 
-    const cacheKey = `${page}:${limit}`
-    const cached = publicJobsCache.get(cacheKey)
-    if (!isFiltered && cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-      return res.json(cached.data)
+    const cacheKey = `jobs:public:${page}:${limit}`
+    if (!isFiltered) {
+      const cached = await cacheGet<{
+        jobs: unknown[]
+        total: number
+        page: number
+        limit: number
+      }>(cacheKey)
+      if (cached) {
+        res.set('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=30')
+        return res.json(cached)
+      }
     }
 
     let query = supabaseAdmin
@@ -123,9 +109,8 @@ router.get('/public', async (req, res) => {
       limit,
     }
 
-    // Cache only unfiltered results
     if (!isFiltered) {
-      publicJobsCache.set(cacheKey, { data: payload, cachedAt: Date.now() })
+      await cacheSet(cacheKey, payload, 60)
     }
 
     // Allow CDN and browsers to cache unfiltered results for 60 seconds
@@ -144,60 +129,61 @@ router.get('/public', async (req, res) => {
 // GET /api/jobs - List jobs with filters
 router.get('/', validateQuery(jobsListQuerySchema), async (req, res) => {
   try {
-    const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
-    const id = searchParams.get('id');
-    const location = searchParams.get('location');
-    const jobType = searchParams.get('job_type');
-    const specialization = searchParams.get('specialization');
-    const farmId = searchParams.get('farm_id');
-    const status = searchParams.get('status') || 'all';
+    const { searchParams } = new URL(req.url, `http://${req.headers.host}`)
+    const id = searchParams.get('id')
+    const location = searchParams.get('location')
+    const jobType = searchParams.get('job_type')
+    const specialization = searchParams.get('specialization')
+    const farmId = searchParams.get('farm_id')
+    const status = searchParams.get('status') || 'all'
 
     // Single-job lookups are not cached (they're already fast and rarely repeated)
     const supabase = status === 'all'
       ? getSupabaseAdminClient()
-      : getSupabaseClient();
+      : getSupabaseClient()
 
     if (id) {
+      const cacheKey = `job:${id}`
+      const cached = await cacheGet<{ job: unknown }>(cacheKey)
+      if (cached) return res.json(cached)
+
       const singleResult = await supabase
         .from('jobs')
         .select(jobListSelect)
         .eq('id', id)
-        .single();
-      if (singleResult.error) throw singleResult.error;
-      return res.json({ job: singleResult.data });
+        .single()
+      if (singleResult.error) throw singleResult.error
+      const responseData = { job: singleResult.data }
+      await cacheSet(cacheKey, responseData, 120)
+      return res.json(responseData)
     }
 
-    const cacheKey = JSON.stringify({ status, location, jobType, specialization, farmId });
-    const cached = cacheGet(cacheKey);
-    if (cached) return res.json({ jobs: cached });
-
-    let query = supabase.from('jobs').select(jobListSelect);
+    let query = supabase.from('jobs').select(jobListSelect)
 
     if (status && status !== 'all') {
       query = query.eq('status', status);
     } else {
       // Filter inactive jobs older than 24 hours at the DB level instead of in JS
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
       query = query.or(`status.neq.inactive,and(status.eq.inactive,status_changed_at.gte.${cutoff})`)
     }
 
-    if (location) query = query.eq('location', location);
-    if (jobType) query = query.eq('job_type', jobType);
-    if (specialization) query = query.eq('required_specialization', specialization);
-    if (farmId) query = query.eq('farm_id', farmId);
+    if (location) query = query.eq('location', location)
+    if (jobType) query = query.eq('job_type', jobType)
+    if (specialization) query = query.eq('required_specialization', specialization)
+    if (farmId) query = query.eq('farm_id', farmId)
 
-    query = query.order('created_at', { ascending: false });
+    query = query.order('created_at', { ascending: false })
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const { data, error } = await query
+    if (error) throw error
 
-    const jobs = data || [];
-    cacheSet(cacheKey, jobs);
-    return res.json({ jobs });
+    const jobs = data || []
+    return res.json({ jobs })
   } catch (error) {
-    return res.status(500).json({ error: errorMessage(error) });
+    return res.status(500).json({ error: errorMessage(error) })
   }
-});
+})
 
 // POST /api/jobs - Create job (Farm or Admin)
 router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
@@ -289,7 +275,8 @@ router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
       .single();
     
     if (error) throw error;
-    cacheInvalidate();
+    await cacheDel(`job:${job.id as string}`)
+    await cacheDelPattern('jobs:public:*')
     return res.status(201).json({ job });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
@@ -392,7 +379,8 @@ router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) =
       .single();
     
     if (error) throw error;
-    cacheInvalidate();
+    await cacheDel(`job:${req.params.id}`)
+    await cacheDelPattern('jobs:public:*')
     return res.json({ job: updated });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
@@ -435,11 +423,12 @@ router.delete('/:id', authenticate, async (req, res) => {
       .eq('id', req.params.id);
 
     if (error) throw error;
-    cacheInvalidate();
+    await cacheDel(`job:${req.params.id}`)
+    await cacheDelPattern('jobs:public:*')
     return res.status(204).send();
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
   }
 });
 
-export default router;
+export default router
