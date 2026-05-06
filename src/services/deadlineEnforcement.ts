@@ -1,6 +1,7 @@
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { sendNotificationEmail } from './email-service.js'
 import { sendRawSms } from './sms-service.js'
+import { fireAndForget } from '../lib/notify.js'
 
 interface JobProfiles {
   full_name?: string | null
@@ -82,53 +83,47 @@ export async function enforceApplicationDeadlines(): Promise<{
 
       const emailAddr = farm?.email?.trim()
       if (emailAddr) {
-        try {
-          const messageBody =
-            `Hi ${contactName},\n\n` +
-            `The application deadline for your job posting "${job.title}" (${job.location}) has passed.\n\n` +
-            'The listing has been automatically closed. You can log in to your AgroTalentHub dashboard to review applications or repost the job.\n\n' +
-            'Thank you for using AgroTalentHub.'
-          const result = await sendNotificationEmail(
-            emailAddr,
-            `Application deadline passed - ${job.title}`,
-            messageBody,
-            contactName,
-            {
-              role: 'farm',
-              ctaText: 'Open dashboard',
-              ctaUrl: '/dashboard/farm/jobs',
+        const messageBody =
+          `Hi ${contactName},\n\n` +
+          `The application deadline for your job posting "${job.title}" (${job.location}) has passed.\n\n` +
+          'The listing has been automatically closed. You can log in to your AgroTalentHub dashboard to review applications or repost the job.\n\n' +
+          'Thank you for using AgroTalentHub.'
+        fireAndForget(
+          async () => {
+            const result = await sendNotificationEmail(
+              emailAddr,
+              `Application deadline passed - ${job.title}`,
+              messageBody,
+              contactName,
+              {
+                role: 'farm',
+                ctaText: 'Open dashboard',
+                ctaUrl: '/dashboard/farm/jobs',
+              }
+            )
+            if (!result.success) {
+              throw new Error(result.error ?? 'send failed')
             }
-          )
-          if (!result.success) {
-            errors.push(`Job ${job.id} email: ${result.error ?? 'send failed'}`)
-          }
-        } catch (emailErr) {
-          errors.push(
-            `Job ${job.id} email: ${
-              emailErr instanceof Error ? emailErr.message : String(emailErr)
-            }`
-          )
-        }
+          },
+          'deadline-enforcement-email'
+        )
       }
 
       const phoneRaw = farm?.phone?.trim()
       if (phoneRaw) {
-        try {
-          const smsResult = await sendRawSms(
-            phoneRaw,
-            `AgroTalentHub: Your job "${job.title}" has been closed as the application deadline has passed. Log in to review applications or repost. agrotalenthub.com`,
-            'Deadline enforcement'
-          )
-          if (!smsResult.success) {
-            errors.push(`Job ${job.id} SMS: ${smsResult.error ?? 'send failed'}`)
-          }
-        } catch (smsErr) {
-          errors.push(
-            `Job ${job.id} SMS: ${
-              smsErr instanceof Error ? smsErr.message : String(smsErr)
-            }`
-          )
-        }
+        fireAndForget(
+          async () => {
+            const smsResult = await sendRawSms(
+              phoneRaw,
+              `AgroTalentHub: Your job "${job.title}" has been closed as the application deadline has passed. Log in to review applications or repost. agrotalenthub.com`,
+              'Deadline enforcement'
+            )
+            if (!smsResult.success) {
+              throw new Error(smsResult.error ?? 'send failed')
+            }
+          },
+          'deadline-enforcement-sms'
+        )
       }
 
       try {

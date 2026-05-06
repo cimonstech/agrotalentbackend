@@ -1,5 +1,6 @@
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { sendNotificationEmail } from './email-service.js'
+import { fireAndForget } from '../lib/notify.js'
 
 export async function recordFarmConversion(
   token: string,
@@ -66,13 +67,21 @@ export async function recordFarmConversion(
 
       for (const admin of admins) {
         if (!admin.email) continue
-        await sendNotificationEmail(
-          admin.email,
-          'Sourced Farm Converted',
-          `A sourced farm has registered via a preview link.\n\nFarm: ${farmLabel}\nSource: ${tokenRow.source_name ?? 'Unknown'}\nJob ID: ${String(tokenRow.job_id ?? 'None')}`,
-          admin.full_name ?? '',
-          { role: 'admin', ctaUrl: '/dashboard/admin/jobs' }
-        ).catch(() => {})
+        fireAndForget(
+          async () => {
+            const result = await sendNotificationEmail(
+              admin.email,
+              'Sourced Farm Converted',
+              `A sourced farm has registered via a preview link.\n\nFarm: ${farmLabel}\nSource: ${tokenRow.source_name ?? 'Unknown'}\nJob ID: ${String(tokenRow.job_id ?? 'None')}`,
+              admin.full_name ?? '',
+              { role: 'admin', ctaUrl: '/dashboard/admin/jobs' }
+            )
+            if (!result.success) {
+              throw new Error(result.error ?? 'send failed')
+            }
+          },
+          'farm-conversion-admin-email'
+        )
       }
     }
   } catch {

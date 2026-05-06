@@ -8,6 +8,7 @@ import { queryParamToString } from '../lib/query.js'
 import { errorMessage } from '../lib/errors.js'
 import { validate } from '../lib/validate.js'
 import { createUserSchema, verifyUserSchema } from '../lib/schemas.js'
+import { fireAndForget } from '../lib/notify.js'
 
 const router = Router()
 
@@ -397,23 +398,22 @@ router.post('/verify/:id', requireAdmin, validate(verifyUserSchema), async (req,
         });
       
       // Send email notification
-      try {
-        const { sendNotificationEmail } = await import('../services/email-service.js');
-        const emailResult = await sendNotificationEmail(
-          updatedProfile.email,
-          'Profile Verified - AgroTalent Hub',
-          `Great news! Your profile has been verified by our admin team. You can now:\n\n- Browse and apply to job opportunities\n- Receive job match notifications\n- Connect with employers directly\n\nClick the button below to continue.`,
-          updatedProfile.full_name || '',
-          { role: updatedProfile.role, ctaUrl: dashboardPath, ctaText: 'Open Dashboard' }
-        );
-        
-        if (!emailResult.success) {
-          console.warn('Failed to send verification email:', emailResult.error);
-        }
-      } catch (emailError) {
-        console.error('Error sending verification email:', emailError);
-        // Don't fail the verification if email fails
-      }
+      fireAndForget(
+        async () => {
+          const { sendNotificationEmail } = await import('../services/email-service.js')
+          const emailResult = await sendNotificationEmail(
+            updatedProfile.email,
+            'Profile Verified - AgroTalent Hub',
+            `Great news! Your profile has been verified by our admin team. You can now:\n\n- Browse and apply to job opportunities\n- Receive job match notifications\n- Connect with employers directly\n\nClick the button below to continue.`,
+            updatedProfile.full_name || '',
+            { role: updatedProfile.role, ctaUrl: dashboardPath, ctaText: 'Open Dashboard' }
+          )
+          if (!emailResult.success) {
+            throw new Error(emailResult.error || 'Failed to send verification email')
+          }
+        },
+        'admin-user-verified-email'
+      )
     }
     
     return res.json({

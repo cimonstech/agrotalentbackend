@@ -5,6 +5,7 @@ import type { AuthRequest } from '../types/auth.js';
 import { errorMessage } from '../lib/errors.js';
 import { sendVerificationApprovedSms, sendApplicationStatusSms } from '../services/sms-service.js';
 import { cacheDel, cacheGet, cacheSet } from '../lib/redis.js'
+import { fireAndForget } from '../lib/notify.js'
 
 const router = express.Router();
 
@@ -95,9 +96,21 @@ router.post('/send-sms', requireAuth, async (req, res) => {
       .single()
     if (profile?.phone) {
       if (type === 'verification_approved') {
-        void sendVerificationApprovedSms(profile.phone, profile.full_name ?? 'User').catch(console.error)
+        fireAndForget(
+          () => sendVerificationApprovedSms(profile.phone, profile.full_name ?? 'User'),
+          'verification-approved-sms'
+        )
       } else if (type === 'application_status' && status && job_title) {
-        void sendApplicationStatusSms(profile.phone, profile.full_name ?? 'Applicant', job_title, status).catch(console.error)
+        fireAndForget(
+          () =>
+            sendApplicationStatusSms(
+              profile.phone,
+              profile.full_name ?? 'Applicant',
+              job_title,
+              status
+            ),
+          'application-status-sms'
+        )
       }
     }
     return res.json({ success: true })

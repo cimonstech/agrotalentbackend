@@ -9,6 +9,7 @@ import { validate } from '../lib/validate.js'
 import { initiatePaymentSchema, verifyPaymentSchema } from '../lib/schemas.js'
 import { sendPaymentConfirmedEmail } from '../services/email-service.js'
 import { sendPaymentConfirmedSms } from '../services/sms-service.js'
+import { fireAndForget } from '../lib/notify.js'
 
 const router = Router()
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY ?? ''
@@ -31,23 +32,31 @@ async function triggerPaymentConfirmedEmail(payment: any): Promise<void> {
     db.from('profiles').select('full_name').eq('id', placement.graduate_id).maybeSingle()
   ])
   if (!farm?.email) return
-  void sendPaymentConfirmedEmail(
-    farm.email,
-    farm.farm_name ?? farm.full_name ?? 'Farm',
-    Number(payment.amount ?? 0),
-    payment.currency ?? 'GHS',
-    job?.title ?? 'Placement',
-    graduate?.full_name ?? 'Graduate',
-    payment.paystack_reference ?? payment.payment_reference ?? 'N/A'
-  ).catch(console.error)
+  fireAndForget(
+    () =>
+      sendPaymentConfirmedEmail(
+        farm.email,
+        farm.farm_name ?? farm.full_name ?? 'Farm',
+        Number(payment.amount ?? 0),
+        payment.currency ?? 'GHS',
+        job?.title ?? 'Placement',
+        graduate?.full_name ?? 'Graduate',
+        payment.paystack_reference ?? payment.payment_reference ?? 'N/A'
+      ),
+    'payment-confirmed-email'
+  )
   if (farm?.phone) {
-    void sendPaymentConfirmedSms(
-      farm.phone,
-      farm.farm_name ?? farm.full_name ?? 'Farm',
-      Number(payment.amount ?? 0),
-      payment.currency ?? 'GHS',
-      job?.title ?? 'Placement'
-    ).catch(console.error)
+    fireAndForget(
+      () =>
+        sendPaymentConfirmedSms(
+          farm.phone,
+          farm.farm_name ?? farm.full_name ?? 'Farm',
+          Number(payment.amount ?? 0),
+          payment.currency ?? 'GHS',
+          job?.title ?? 'Placement'
+        ),
+      'payment-confirmed-sms'
+    )
   }
 }
 

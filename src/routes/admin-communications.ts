@@ -15,6 +15,7 @@ import { validate } from '../lib/validate.js'
 import {
   createNoticeSchema,
 } from '../lib/schemas.js'
+import { fireAndForget } from '../lib/notify.js'
 
 const router = Router();
 
@@ -319,31 +320,31 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
         skippedCount: 0,
       });
 
-      void (async () => {
-        const { sendRawSms } = await import('../services/sms-service.js');
-        let bgSuccess = 0;
-        let bgFailure = 0;
-        let bgSkipped = 0;
-        const bgFailures: { phone: string; error: string }[] = [];
+      fireAndForget(async () => {
+        const { sendRawSms } = await import('../services/sms-service.js')
+        let bgSuccess = 0
+        let bgFailure = 0
+        let bgSkipped = 0
+        const bgFailures: { phone: string; error: string }[] = []
 
         for (const t of targets) {
           if (!t.phone || !String(t.phone).trim()) {
-            bgSkipped += 1;
-            continue;
+            bgSkipped += 1
+            continue
           }
-          const smsBody = personalizeCommunicationMessage(message, t);
-          const result = await sendRawSms(t.phone, smsBody, 'Admin Communications');
+          const smsBody = personalizeCommunicationMessage(message, t)
+          const result = await sendRawSms(t.phone, smsBody, 'Admin Communications')
           if (result.success) {
-            bgSuccess += 1;
+            bgSuccess += 1
           } else {
-            bgFailure += 1;
-            bgFailures.push({ phone: t.phone, error: result.error ?? 'failed' });
+            bgFailure += 1
+            bgFailures.push({ phone: t.phone, error: result.error ?? 'failed' })
           }
 
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await new Promise((resolve) => setTimeout(resolve, 200))
         }
 
-        const finalStatus = bgSuccess === 0 ? 'failed' : 'sent';
+        const finalStatus = bgSuccess === 0 ? 'failed' : 'sent'
         if (logId) {
           await supabaseAdmin
             .from('communication_logs')
@@ -353,7 +354,7 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
               status: finalStatus,
               error_details: bgFailures.length ? bgFailures : null,
             })
-            .eq('id', logId);
+            .eq('id', logId)
         }
 
         console.log(
@@ -364,8 +365,8 @@ router.post('/communications/send', requireAdmin, async (req, res) => {
           'failed,',
           bgSkipped,
           'skipped'
-        );
-      })().catch(console.error);
+        )
+      }, 'admin-communications-sms-bulk')
 
       return;
     } else {
@@ -529,13 +530,17 @@ router.post('/notices', requireAdmin, validate(createNoticeSchema), async (req, 
       if (!p.email) continue
       const roleSegment = p.role === 'skilled' ? 'skilled' : p.role === 'student' ? 'student' : p.role === 'farm' ? 'farm' : 'graduate'
       const noticeHref = `${frontendBase}/dashboard/${roleSegment}/notices/${notice.id}`
-      void sendNoticePostedEmail(
-        p.email,
-        p.full_name || 'User',
-        notice.title,
-        notice.audience,
-        noticeHref
-      ).catch(console.error)
+      fireAndForget(
+        () =>
+          sendNoticePostedEmail(
+            p.email ?? '',
+            p.full_name || 'User',
+            notice.title,
+            notice.audience,
+            noticeHref
+          ),
+        'notice-posted-email'
+      )
     }
 
     // Send notice by email to the same audience (merge auth emails like communications)

@@ -10,6 +10,7 @@ import { createTrainingSchema } from '../lib/schemas.js'
 import { sendTrainingScheduledEmail } from '../services/email-service.js';
 import { sendTrainingScheduledSms } from '../services/sms-service.js';
 import { sendNotificationEmail } from '../services/email-service.js';
+import { fireAndForget } from '../lib/notify.js'
 
 const router = Router();
 
@@ -202,28 +203,36 @@ router.post('/trainings', requireAdmin, validate(createTrainingSchema), async (r
         .maybeSingle()
 
       if (!participantProfile?.email) continue
-      void sendTrainingScheduledEmail(
-        participantProfile.email,
-        participantProfile.full_name ?? 'Participant',
-        session.title,
-        session.scheduled_at,
-        session.zoom_link,
-        session.trainer_name
-      ).catch(console.error)
+      fireAndForget(
+        () =>
+          sendTrainingScheduledEmail(
+            participantProfile.email,
+            participantProfile.full_name ?? 'Participant',
+            session.title,
+            session.scheduled_at,
+            session.zoom_link,
+            session.trainer_name
+          ),
+        'training-scheduled-email'
+      )
       if (participantProfile.phone) {
-        void sendTrainingScheduledSms(
-          participantProfile.phone,
-          participantProfile.full_name ?? 'Participant',
-          session.title,
-          new Date(session.scheduled_at).toLocaleDateString('en-GH', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendTrainingScheduledSms(
+              participantProfile.phone,
+              participantProfile.full_name ?? 'Participant',
+              session.title,
+              new Date(session.scheduled_at).toLocaleDateString('en-GH', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            ),
+          'training-scheduled-sms'
+        )
       }
     }
 
@@ -398,7 +407,6 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
         .maybeSingle();
 
       for (const t of targets) {
-        try {
           const trainingLinkForRole = (role: string) => {
             switch (role) {
               case 'admin':
@@ -416,20 +424,21 @@ router.post('/trainings/:id/assign', requireAdmin, async (req, res) => {
             }
           };
 
-          await sendNotificationEmail(
-            t.email || '',
-            'Training Assigned - AgroTalent Hub',
-            `You have been assigned to a training session: <b>${training?.title || 'Training Session'}</b><br/><br/>
+          fireAndForget(
+            () =>
+              sendNotificationEmail(
+                t.email || '',
+                'Training Assigned - AgroTalent Hub',
+                `You have been assigned to a training session: <b>${training?.title || 'Training Session'}</b><br/><br/>
             <b>Date/Time:</b> ${training?.scheduled_at ? new Date(training.scheduled_at).toLocaleString() : ''}<br/>
             <b>Region:</b> ${training?.region || ''}<br/>
             <b>Zoom Link:</b> ${training?.zoom_link || 'See dashboard'}<br/><br/>
             Please log in to your dashboard for full details.`,
-            t.full_name || '',
-            { role: t.role, ctaUrl: trainingLinkForRole(t.role), ctaText: 'View Training' }
-          );
-        } catch {
-          // ignore
-        }
+                t.full_name || '',
+                { role: t.role, ctaUrl: trainingLinkForRole(t.role), ctaText: 'View Training' }
+              ),
+            'training-assigned-email'
+          )
       }
     }
 

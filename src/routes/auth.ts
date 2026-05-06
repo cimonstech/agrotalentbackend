@@ -3,6 +3,7 @@ import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js'
 import { errorMessage } from '../lib/errors.js'
 import { sendWelcomeEmail } from '../services/email-service.js'
+import { fireAndForget } from '../lib/notify.js'
 import { authLimiter } from '../middleware/rateLimiter.js'
 import { validate } from '../lib/validate.js'
 import {
@@ -199,7 +200,10 @@ router.post('/signup', authLimiter, validate(signUpSchema), async (req, res) => 
 
     console.log('Profile created successfully:', JSON.stringify(profileResult, null, 2));
 
-    void sendWelcomeEmail(email, full_name || 'Member', role).catch(console.error);
+    fireAndForget(
+      () => sendWelcomeEmail(email, full_name || 'Member', role),
+      'welcome-email'
+    )
 
     // Send welcome/verification email via Resend (even though email is auto-confirmed)
     // This is a welcome email that also serves as verification confirmation

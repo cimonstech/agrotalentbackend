@@ -7,6 +7,7 @@ import { errorMessage } from '../lib/errors.js'
 import { validate } from '../lib/validate.js'
 import { postMessageBodySchema } from '../lib/schemas.js'
 import { sendNewMessageEmail } from '../services/email-service.js'
+import { fireAndForget } from '../lib/notify.js'
 
 const router = express.Router();
 
@@ -204,13 +205,17 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
               ? 'student'
               : 'graduate'
         const conversationLink = `${frontendBase}/dashboard/${recipientRoleSegment}/messages`
-        void sendNewMessageEmail(
-          recipientProfile.email,
-          recipientProfile.full_name ?? 'User',
-          senderProfile?.full_name ?? 'Someone',
-          String(message.content ?? '').slice(0, 150),
-          conversationLink
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendNewMessageEmail(
+              recipientProfile.email,
+              recipientProfile.full_name ?? 'User',
+              senderProfile?.full_name ?? 'Someone',
+              String(message.content ?? '').slice(0, 150),
+              conversationLink
+            ),
+          'new-message-email'
+        )
       }
     }
     

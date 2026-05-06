@@ -13,6 +13,7 @@ import { calculateMatchScore } from '../services/matching-service.js';
 import { sendApplicationReceivedEmail, sendApplicationStatusEmail } from '../services/email-service.js';
 import { sendApplicationReceivedSms, sendApplicationStatusSms } from '../services/sms-service.js';
 import { schedulePlacementConfirmedEmail } from './placements.js';
+import { fireAndForget } from '../lib/notify.js'
 
 const router = express.Router();
 
@@ -389,7 +390,7 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
       .update({ application_count: (jobFull.application_count || 0) + 1 })
       .eq('id', job_id);
 
-    void (async () => {
+    fireAndForget(async () => {
       const admin = getSupabaseAdminClient();
       const { data: farm } = await admin
         .from('profiles')
@@ -399,20 +400,28 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
       const applicantName =
         (profile as { full_name?: string | null }).full_name ?? 'Applicant';
       if (farm?.email) {
-        await sendApplicationReceivedEmail(
-          farm.email,
-          farm.farm_name ?? farm.full_name ?? 'Farm',
-          applicantName,
-          String(jobFull.title)
-        );
+        fireAndForget(
+          () =>
+            sendApplicationReceivedEmail(
+              farm.email,
+              farm.farm_name ?? farm.full_name ?? 'Farm',
+              applicantName,
+              String(jobFull.title)
+            ),
+          'application-received-email'
+        )
       }
       if (farm?.phone) {
-        void sendApplicationReceivedSms(
-          farm.phone,
-          farm.farm_name ?? farm.full_name ?? 'Farm',
-          applicantName,
-          String(jobFull.title)
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendApplicationReceivedSms(
+              farm.phone,
+              farm.farm_name ?? farm.full_name ?? 'Farm',
+              applicantName,
+              String(jobFull.title)
+            ),
+          'application-received-sms'
+        )
       }
 
       if (jobFull.is_platform_job) {
@@ -438,16 +447,20 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
           })()
 
           if (adminUser.email) {
-            void sendApplicationReceivedEmail(
-              adminUser.email,
-              adminUser.full_name ?? 'Admin',
-              applicantName,
-              String(jobFull.title)
-            ).catch(console.error)
+            fireAndForget(
+              () =>
+                sendApplicationReceivedEmail(
+                  adminUser.email,
+                  adminUser.full_name ?? 'Admin',
+                  applicantName,
+                  String(jobFull.title)
+                ),
+              'application-received-email'
+            )
           }
         }
       }
-    })().catch(console.error);
+    }, 'application-received-notifications')
 
     return res.status(201).json({ application });
   } catch (error) {
@@ -690,7 +703,7 @@ router.patch(
     if (error) throw error;
 
     if (typeof status === 'string' && status.length > 0) {
-      void (async () => {
+      fireAndForget(async () => {
         const admin = getSupabaseAdminClient();
         const { data: applicantProfile } = await admin
           .from('profiles')
@@ -703,23 +716,31 @@ router.patch(
           .eq('id', application.job_id)
           .single();
         if (applicantProfile?.email && jobRow?.title) {
-          await sendApplicationStatusEmail(
-            applicantProfile.email,
-            applicantProfile.full_name ?? 'Applicant',
-            jobRow.title,
-            status,
-            typeof review_notes === 'string' ? review_notes : undefined
-          );
+          fireAndForget(
+            () =>
+              sendApplicationStatusEmail(
+                applicantProfile.email,
+                applicantProfile.full_name ?? 'Applicant',
+                jobRow.title,
+                status,
+                typeof review_notes === 'string' ? review_notes : undefined
+              ),
+            'application-status-email'
+          )
         }
         if (applicantProfile?.phone && jobRow?.title) {
-          void sendApplicationStatusSms(
-            applicantProfile.phone,
-            applicantProfile.full_name ?? 'Applicant',
-            jobRow.title,
-            status
-          ).catch(console.error)
+          fireAndForget(
+            () =>
+              sendApplicationStatusSms(
+                applicantProfile.phone,
+                applicantProfile.full_name ?? 'Applicant',
+                jobRow.title,
+                status
+              ),
+            'application-status-sms'
+          )
         }
-      })().catch(console.error);
+      }, 'application-status-notifications')
     }
 
     const applicantRow = relationOne(application.applicant as { email?: string; full_name?: string; role?: string } | null);

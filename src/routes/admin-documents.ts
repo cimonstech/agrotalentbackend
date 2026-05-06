@@ -6,6 +6,7 @@ import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js'
 import { sendDocumentReviewedEmail } from '../services/email-service.js';
 import { sendDocumentReviewedSms } from '../services/sms-service.js';
+import { fireAndForget } from '../lib/notify.js'
 
 const router = Router();
 
@@ -92,22 +93,30 @@ router.post('/documents/:id/approve', requireAdmin, async (req, res) => {
         .eq('id', document.user_id)
         .maybeSingle()
       if (profile?.email) {
-        void sendDocumentReviewedEmail(
-          profile.email,
-          profile.full_name ?? 'User',
-          document.document_type,
-          document.file_name,
-          'approved',
-          null
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendDocumentReviewedEmail(
+              profile.email,
+              profile.full_name ?? 'User',
+              document.document_type,
+              document.file_name,
+              'approved',
+              null
+            ),
+          'document-reviewed-email'
+        )
       }
       if (profile?.phone) {
-        void sendDocumentReviewedSms(
-          profile.phone,
-          profile.full_name ?? 'User',
-          document.document_type,
-          'approved'
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendDocumentReviewedSms(
+              profile.phone,
+              profile.full_name ?? 'User',
+              document.document_type,
+              'approved'
+            ),
+          'document-reviewed-sms'
+        )
       }
     }
     return res.json({ document });
@@ -142,22 +151,30 @@ router.post('/documents/:id/reject', requireAdmin, async (req, res) => {
         .eq('id', document.user_id)
         .maybeSingle()
       if (profile?.email) {
-        void sendDocumentReviewedEmail(
-          profile.email,
-          profile.full_name ?? 'User',
-          document.document_type,
-          document.file_name,
-          'rejected',
-          reason || null
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendDocumentReviewedEmail(
+              profile.email,
+              profile.full_name ?? 'User',
+              document.document_type,
+              document.file_name,
+              'rejected',
+              reason || null
+            ),
+          'document-reviewed-email'
+        )
       }
       if (profile?.phone) {
-        void sendDocumentReviewedSms(
-          profile.phone,
-          profile.full_name ?? 'User',
-          document.document_type,
-          'rejected'
-        ).catch(console.error)
+        fireAndForget(
+          () =>
+            sendDocumentReviewedSms(
+              profile.phone,
+              profile.full_name ?? 'User',
+              document.document_type,
+              'rejected'
+            ),
+          'document-reviewed-sms'
+        )
       }
     }
     return res.json({ document });

@@ -6,6 +6,7 @@ import { queryParamToString } from '../lib/query.js';
 import { errorMessage } from '../lib/errors.js';
 import { sendPlacementConfirmedEmail } from '../services/email-service.js';
 import { sendPlacementConfirmedSms } from '../services/sms-service.js';
+import { fireAndForget } from '../lib/notify.js'
 
 const router = express.Router();
 
@@ -116,7 +117,7 @@ export function schedulePlacementConfirmedEmail(placement: {
   job_id: string;
   start_date?: string | null;
 }): void {
-  void (async () => {
+  fireAndForget(async () => {
     const admin = getSupabaseAdminClient();
     const [{ data: graduate }, { data: farm }, { data: jobRow }] = await Promise.all([
       admin
@@ -132,22 +133,30 @@ export function schedulePlacementConfirmedEmail(placement: {
       admin.from('jobs').select('title').eq('id', placement.job_id).single(),
     ]);
     if (!graduate?.email || !jobRow?.title) return;
-    await sendPlacementConfirmedEmail(
-      graduate.email,
-      graduate.full_name ?? 'Graduate',
-      jobRow.title,
-      farm?.farm_name ?? farm?.full_name ?? 'Farm',
-      placement.start_date ?? undefined
-    );
+    fireAndForget(
+      () =>
+        sendPlacementConfirmedEmail(
+          graduate.email,
+          graduate.full_name ?? 'Graduate',
+          jobRow.title,
+          farm?.farm_name ?? farm?.full_name ?? 'Farm',
+          placement.start_date ?? undefined
+        ),
+      'placement-confirmed-email'
+    )
     if (graduate?.phone) {
-      void sendPlacementConfirmedSms(
-        graduate.phone,
-        graduate.full_name ?? 'Graduate',
-        jobRow.title,
-        farm?.farm_name ?? farm?.full_name ?? 'Farm'
-      ).catch(console.error)
+      fireAndForget(
+        () =>
+          sendPlacementConfirmedSms(
+            graduate.phone,
+            graduate.full_name ?? 'Graduate',
+            jobRow.title,
+            farm?.farm_name ?? farm?.full_name ?? 'Farm'
+          ),
+        'placement-confirmed-sms'
+      )
     }
-  })().catch(console.error);
+  }, 'placement-confirmed-notifications')
 }
 
 export default router;
