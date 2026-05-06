@@ -28,7 +28,12 @@ router.get('/', async (_req, res) => {
 
   // Check R2 connectivity
   try {
-    const r2Url = process.env.R2_PUBLIC_URL
+    const rawR2Url = process.env.R2_PUBLIC_URL
+    const r2Url = rawR2Url
+      ? rawR2Url.startsWith('http')
+        ? rawR2Url
+        : 'https://' + rawR2Url
+      : null
     if (r2Url) {
       const r2Start = Date.now()
       const r2Res = await fetch(r2Url, { method: 'HEAD', signal: AbortSignal.timeout(3000) })
