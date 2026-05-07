@@ -43,7 +43,16 @@ async function triggerPaymentConfirmedEmail(payment: any): Promise<void> {
         graduate?.full_name ?? 'Graduate',
         payment.paystack_reference ?? payment.payment_reference ?? 'N/A'
       ),
-    'payment-confirmed-email'
+    'payment-confirmed-email',
+    {
+      event_type: 'payment_confirmed',
+      channel: 'email',
+      recipient_email: farm.email,
+      subject: 'Payment confirmed',
+      message: 'Payment confirmation email sent',
+      related_job_id: placement.job_id ?? null,
+      triggered_by: 'system',
+    }
   )
   if (farm?.phone) {
     fireAndForget(
@@ -55,7 +64,15 @@ async function triggerPaymentConfirmedEmail(payment: any): Promise<void> {
           payment.currency ?? 'GHS',
           job?.title ?? 'Placement'
         ),
-      'payment-confirmed-sms'
+      'payment-confirmed-sms',
+      {
+        event_type: 'payment_confirmed',
+        channel: 'sms',
+        recipient_phone: farm.phone,
+        message: 'Payment confirmation SMS sent',
+        related_job_id: placement.job_id ?? null,
+        triggered_by: 'system',
+      }
     )
   }
 }

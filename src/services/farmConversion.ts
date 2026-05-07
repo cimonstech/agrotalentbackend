@@ -80,7 +80,17 @@ export async function recordFarmConversion(
               throw new Error(result.error ?? 'send failed')
             }
           },
-          'farm-conversion-admin-email'
+          'farm-conversion-admin-email',
+          {
+            event_type: 'farm_converted',
+            channel: 'email',
+            recipient_email: admin.email,
+            subject: 'Sourced Farm Converted',
+            message: 'Farm conversion notification sent to admin',
+            related_job_id: (tokenRow.job_id as string | null) ?? null,
+            related_user_id: farmId,
+            triggered_by: 'system',
+          }
         )
       }
     }

@@ -142,7 +142,17 @@ export function schedulePlacementConfirmedEmail(placement: {
           farm?.farm_name ?? farm?.full_name ?? 'Farm',
           placement.start_date ?? undefined
         ),
-      'placement-confirmed-email'
+      'placement-confirmed-email',
+      {
+        event_type: 'placement_confirmed',
+        channel: 'email',
+        recipient_email: graduate.email,
+        subject: 'Placement confirmed',
+        message: 'Placement confirmation email sent to graduate',
+        related_job_id: placement.job_id,
+        related_user_id: placement.graduate_id,
+        triggered_by: 'admin',
+      }
     )
     if (graduate?.phone) {
       fireAndForget(
@@ -153,7 +163,16 @@ export function schedulePlacementConfirmedEmail(placement: {
             jobRow.title,
             farm?.farm_name ?? farm?.full_name ?? 'Farm'
           ),
-        'placement-confirmed-sms'
+        'placement-confirmed-sms',
+        {
+          event_type: 'placement_confirmed',
+          channel: 'sms',
+          recipient_phone: graduate.phone,
+          message: 'Placement confirmation SMS sent to graduate',
+          related_job_id: placement.job_id,
+          related_user_id: placement.graduate_id,
+          triggered_by: 'admin',
+        }
       )
     }
   }, 'placement-confirmed-notifications')

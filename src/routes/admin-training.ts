@@ -213,7 +213,16 @@ router.post('/trainings', authenticate, requireAdmin, validate(createTrainingSch
             session.zoom_link,
             session.trainer_name
           ),
-        'training-scheduled-email'
+        'training-scheduled-email',
+        {
+          event_type: 'training_scheduled',
+          channel: 'email',
+          recipient_email: participantProfile.email,
+          subject: 'Training scheduled',
+          message: 'Training scheduled email sent',
+          related_user_id: row.participant_id,
+          triggered_by: 'admin',
+        }
       )
       if (participantProfile.phone) {
         fireAndForget(
@@ -231,7 +240,15 @@ router.post('/trainings', authenticate, requireAdmin, validate(createTrainingSch
                 minute: '2-digit',
               })
             ),
-          'training-scheduled-sms'
+          'training-scheduled-sms',
+          {
+            event_type: 'training_scheduled',
+            channel: 'sms',
+            recipient_phone: participantProfile.phone,
+            message: 'Training scheduled SMS sent',
+            related_user_id: row.participant_id,
+            triggered_by: 'admin',
+          }
         )
       }
     }
@@ -437,7 +454,16 @@ router.post('/trainings/:id/assign', authenticate, requireAdmin, async (req, res
                 t.full_name || '',
                 { role: t.role, ctaUrl: trainingLinkForRole(t.role), ctaText: 'View Training' }
               ),
-            'training-assigned-email'
+            'training-assigned-email',
+            {
+              event_type: 'training_assigned',
+              channel: 'email',
+              recipient_email: t.email || null,
+              subject: 'Training Assigned - AgroTalent Hub',
+              message: 'Training assignment email sent',
+              related_user_id: t.id,
+              triggered_by: 'admin',
+            }
           )
       }
     }

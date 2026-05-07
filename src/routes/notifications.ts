@@ -85,7 +85,13 @@ router.patch('/', authenticate, async (req, res) => {
 router.post('/send-sms', requireAdmin, async (req, res) => {
   try {
     const supabase = getSupabaseAdminClient()
-    const { user_id, type, job_title, status } = req.body as { user_id?: string; type?: string; job_title?: string; status?: string }
+    const { user_id, type, job_title, status, job_id } = req.body as {
+      user_id?: string
+      type?: string
+      job_title?: string
+      status?: string
+      job_id?: string
+    }
     if (!user_id || !type) {
       return res.status(400).json({ error: 'user_id and type are required' })
     }
@@ -98,7 +104,15 @@ router.post('/send-sms', requireAdmin, async (req, res) => {
       if (type === 'verification_approved') {
         fireAndForget(
           () => sendVerificationApprovedSms(profile.phone, profile.full_name ?? 'User'),
-          'verification-approved-sms'
+          'verification-approved-sms',
+          {
+            event_type: 'verification_approved',
+            channel: 'sms',
+            recipient_phone: profile.phone,
+            message: 'Verification approved SMS sent',
+            related_user_id: user_id,
+            triggered_by: 'system',
+          }
         )
       } else if (type === 'application_status' && status && job_title) {
         fireAndForget(
@@ -109,7 +123,16 @@ router.post('/send-sms', requireAdmin, async (req, res) => {
               job_title,
               status
             ),
-          'application-status-sms'
+          'application-status-sms',
+          {
+            event_type: 'application_status_update',
+            channel: 'sms',
+            recipient_phone: profile.phone,
+            message: 'Application status SMS sent',
+            related_job_id: job_id ?? null,
+            related_user_id: user_id,
+            triggered_by: 'system',
+          }
         )
       }
     }

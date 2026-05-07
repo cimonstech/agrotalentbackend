@@ -398,6 +398,7 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
         .single();
       const applicantName =
         (profile as { full_name?: string | null }).full_name ?? 'Applicant';
+      const applicantId = (req as AuthRequest).user.id
       if (farm?.email) {
         fireAndForget(
           () =>
@@ -407,7 +408,17 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
               applicantName,
               String(jobFull.title)
             ),
-          'application-received-email'
+          'application-received-email',
+          {
+            event_type: 'application_received',
+            channel: 'email',
+            recipient_email: farm.email,
+            subject: 'New application received',
+            message: 'Application received notification sent to farm',
+            related_job_id: job_id,
+            related_user_id: applicantId,
+            triggered_by: 'system',
+          }
         )
       }
       if (farm?.phone) {
@@ -419,7 +430,16 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
               applicantName,
               String(jobFull.title)
             ),
-          'application-received-sms'
+          'application-received-sms',
+          {
+            event_type: 'application_received',
+            channel: 'sms',
+            recipient_phone: farm.phone,
+            message: 'Application received SMS sent to farm',
+            related_job_id: job_id,
+            related_user_id: applicantId,
+            triggered_by: 'system',
+          }
         )
       }
 
@@ -454,7 +474,17 @@ router.post('/', authenticate, validate(createApplicationSchema), async (req, re
                   applicantName,
                   String(jobFull.title)
                 ),
-              'application-received-email'
+              'application-received-email',
+              {
+                event_type: 'application_received',
+                channel: 'email',
+                recipient_email: adminUser.email,
+                subject: 'New application received',
+                message: 'Application received notification sent to admin',
+                related_job_id: job_id,
+                related_user_id: applicantId,
+                triggered_by: 'system',
+              }
             )
           }
         }
@@ -723,7 +753,17 @@ router.patch(
                 status,
                 typeof review_notes === 'string' ? review_notes : undefined
               ),
-            'application-status-email'
+            'application-status-email',
+            {
+              event_type: 'application_status_update',
+              channel: 'email',
+              recipient_email: applicantProfile.email,
+              subject: 'Application status update',
+              message: 'Status update email sent to applicant',
+              related_job_id: application.job_id,
+              related_user_id: application.applicant_id,
+              triggered_by: 'admin',
+            }
           )
         }
         if (applicantProfile?.phone && jobRow?.title) {
@@ -735,7 +775,16 @@ router.patch(
                 jobRow.title,
                 status
               ),
-            'application-status-sms'
+            'application-status-sms',
+            {
+              event_type: 'application_status_update',
+              channel: 'sms',
+              recipient_phone: applicantProfile.phone,
+              message: 'Status update SMS sent to applicant',
+              related_job_id: application.job_id,
+              related_user_id: application.applicant_id,
+              triggered_by: 'admin',
+            }
           )
         }
       }, 'application-status-notifications')

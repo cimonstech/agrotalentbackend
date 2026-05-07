@@ -105,7 +105,16 @@ export async function enforceApplicationDeadlines(): Promise<{
               throw new Error(result.error ?? 'send failed')
             }
           },
-          'deadline-enforcement-email'
+          'deadline-enforcement-email',
+          {
+            event_type: 'deadline_enforcement',
+            channel: 'email',
+            recipient_email: emailAddr,
+            subject: `Application deadline passed - ${job.title}`,
+            message: 'Deadline enforcement email sent',
+            related_job_id: job.id,
+            triggered_by: 'cron',
+          }
         )
       }
 
@@ -122,25 +131,18 @@ export async function enforceApplicationDeadlines(): Promise<{
               throw new Error(smsResult.error ?? 'send failed')
             }
           },
-          'deadline-enforcement-sms'
+          'deadline-enforcement-sms',
+          {
+            event_type: 'deadline_enforcement',
+            channel: 'sms',
+            recipient_phone: phoneRaw,
+            message: 'Deadline enforcement SMS sent',
+            related_job_id: job.id,
+            triggered_by: 'cron',
+          }
         )
       }
 
-      try {
-        await supabase.from('communication_logs').insert({
-          type: 'email',
-          recipients: 'single',
-          subject: 'Deadline enforcement',
-          message: `Job "${job.title}" auto-closed - application deadline passed.`,
-          recipient_count: 1,
-          success_count: 1,
-          failure_count: 0,
-          status: 'sent',
-          error_details: { job_id: job.id, deadline: job.application_deadline },
-        })
-      } catch {
-        // Non-critical
-      }
     } catch (jobErr) {
       errors.push(
         `Job ${job.id}: ${

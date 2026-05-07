@@ -412,7 +412,16 @@ router.post('/verify/:id', authenticate, requireAdmin, validate(verifyUserSchema
             throw new Error(emailResult.error || 'Failed to send verification email')
           }
         },
-        'admin-user-verified-email'
+        'admin-user-verified-email',
+        {
+          event_type: 'user_verified',
+          channel: 'email',
+          recipient_email: updatedProfile.email,
+          subject: 'Profile Verified - AgroTalent Hub',
+          message: 'User verification email sent',
+          related_user_id: req.params.id,
+          triggered_by: 'admin',
+        }
       )
     }
     

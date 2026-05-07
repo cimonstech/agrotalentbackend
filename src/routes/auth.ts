@@ -4,6 +4,7 @@ import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js'
 import { errorMessage } from '../lib/errors.js'
 import { sendWelcomeEmail } from '../services/email-service.js'
 import { fireAndForget } from '../lib/notify.js'
+import { logCommunication } from '../lib/logCommunication.js'
 import { authLimiter } from '../middleware/rateLimiter.js'
 import { validate } from '../lib/validate.js'
 import {
@@ -202,7 +203,16 @@ router.post('/signup', authLimiter, validate(signUpSchema), async (req, res) => 
 
     fireAndForget(
       () => sendWelcomeEmail(email, full_name || 'Member', role),
-      'welcome-email'
+      'welcome-email',
+      {
+        event_type: 'welcome',
+        channel: 'email',
+        recipient_email: email,
+        subject: 'Welcome to AgroTalentHub',
+        message: 'Welcome email sent to new user',
+        related_user_id: authData.user.id,
+        triggered_by: 'system',
+      }
     )
 
     // Send welcome/verification email via Resend (even though email is auto-confirmed)
@@ -233,6 +243,21 @@ router.post('/signup', authLimiter, validate(signUpSchema), async (req, res) => 
             // Don't fail signup if email fails - user can request resend
           } else {
             console.log('Verification email sent successfully to:', email);
+            try {
+              void logCommunication({
+                type: 'email',
+                channel: 'email',
+                event_type: 'email_verification',
+                recipient_email: email,
+                subject: 'Verify your email',
+                message: 'Verification email sent',
+                status: 'sent',
+                related_user_id: authData.user.id,
+                triggered_by: 'system',
+              })
+            } catch {
+              /* non-critical */
+            }
           }
         } else {
           console.warn('Failed to generate verification link:', linkError);
@@ -450,6 +475,21 @@ router.post('/forgot-password', validate(resetPasswordSchema), async (req, res) 
 
     console.log('Password reset email sent successfully to:', email);
 
+    try {
+      void logCommunication({
+        type: 'email',
+        channel: 'email',
+        event_type: 'password_reset',
+        recipient_email: email,
+        subject: 'Password reset',
+        message: 'Password reset email sent',
+        status: 'sent',
+        triggered_by: 'system',
+      })
+    } catch {
+      /* non-critical */
+    }
+
     return res.json({
       message: 'If an account exists with this email, a password reset link has been sent. Please check your inbox.'
     });
@@ -559,6 +599,21 @@ router.post('/verify-email', async (req, res) => {
         message: 'Verification link generated. Please check your email or try again later.',
         warning: emailResult.error
       });
+    }
+
+    try {
+      void logCommunication({
+        type: 'email',
+        channel: 'email',
+        event_type: 'email_verification',
+        recipient_email: email,
+        subject: 'Verify your email',
+        message: 'Verification email sent',
+        status: 'sent',
+        triggered_by: 'system',
+      })
+    } catch {
+      /* non-critical */
     }
 
     return res.json({

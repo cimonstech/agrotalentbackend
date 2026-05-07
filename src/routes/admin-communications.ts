@@ -366,7 +366,12 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           bgSkipped,
           'skipped'
         )
-      }, 'admin-communications-sms-bulk')
+      }, 'admin-communications-sms-bulk', {
+        event_type: 'bulk_sms',
+        channel: 'sms',
+        message: 'Admin bulk SMS dispatch completed',
+        triggered_by: 'admin',
+      })
 
       return;
     } else {
@@ -539,7 +544,15 @@ router.post('/notices', authenticate, requireAdmin, validate(createNoticeSchema)
             notice.audience,
             noticeHref
           ),
-        'notice-posted-email'
+        'notice-posted-email',
+        {
+          event_type: 'notice_posted',
+          channel: 'email',
+          recipient_email: p.email ?? null,
+          subject: notice.title,
+          message: 'Notice posted email sent',
+          triggered_by: 'admin',
+        }
       )
     }
 

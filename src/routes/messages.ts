@@ -202,7 +202,16 @@ router.post('/', authenticate, validate(postMessageBodySchema), async (req, res)
               String(message.content ?? '').slice(0, 150),
               conversationLink
             ),
-          'new-message-email'
+          'new-message-email',
+          {
+            event_type: 'new_message',
+            channel: 'email',
+            recipient_email: recipientProfile.email,
+            subject: 'New message',
+            message: 'New message notification email sent',
+            related_job_id: job_id ?? null,
+            triggered_by: 'system',
+          }
         )
       }
     }

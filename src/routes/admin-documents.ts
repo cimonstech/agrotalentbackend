@@ -103,7 +103,16 @@ router.post('/documents/:id/approve', authenticate, requireAdmin, async (req, re
               'approved',
               null
             ),
-          'document-reviewed-email'
+          'document-reviewed-email',
+          {
+            event_type: 'document_reviewed',
+            channel: 'email',
+            recipient_email: profile.email,
+            subject: 'Document reviewed',
+            message: 'Document reviewed email sent (approved)',
+            related_user_id: document.user_id,
+            triggered_by: 'admin',
+          }
         )
       }
       if (profile?.phone) {
@@ -115,7 +124,15 @@ router.post('/documents/:id/approve', authenticate, requireAdmin, async (req, re
               document.document_type,
               'approved'
             ),
-          'document-reviewed-sms'
+          'document-reviewed-sms',
+          {
+            event_type: 'document_reviewed',
+            channel: 'sms',
+            recipient_phone: profile.phone,
+            message: 'Document reviewed SMS sent (approved)',
+            related_user_id: document.user_id,
+            triggered_by: 'admin',
+          }
         )
       }
     }
@@ -161,7 +178,16 @@ router.post('/documents/:id/reject', authenticate, requireAdmin, async (req, res
               'rejected',
               reason || null
             ),
-          'document-reviewed-email'
+          'document-reviewed-email',
+          {
+            event_type: 'document_reviewed',
+            channel: 'email',
+            recipient_email: profile.email,
+            subject: 'Document reviewed',
+            message: 'Document reviewed email sent (rejected)',
+            related_user_id: document.user_id,
+            triggered_by: 'admin',
+          }
         )
       }
       if (profile?.phone) {
@@ -173,7 +199,15 @@ router.post('/documents/:id/reject', authenticate, requireAdmin, async (req, res
               document.document_type,
               'rejected'
             ),
-          'document-reviewed-sms'
+          'document-reviewed-sms',
+          {
+            event_type: 'document_reviewed',
+            channel: 'sms',
+            recipient_phone: profile.phone,
+            message: 'Document reviewed SMS sent (rejected)',
+            related_user_id: document.user_id,
+            triggered_by: 'admin',
+          }
         )
       }
     }
