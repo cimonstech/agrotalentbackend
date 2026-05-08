@@ -106,7 +106,18 @@ const { doubleCsrfProtection, generateCsrfToken } = doubleCsrf({
 // running doubleCsrfProtection again (against a cookie set by the wrong origin)
 // would always fail. Fall back to doubleCsrfProtection only for any direct
 // browser → Express calls that don't carry the trusted header.
+//
+// Public, unauthenticated, cross-origin tracking endpoints are exempt from
+// CSRF entirely: they are rate-limited + deduplicated, and CSRF tokens are
+// meaningless on anonymous endpoints (CSRF protects authenticated actions
+// from being forged by third-party sites — there is no auth context to forge
+// here).
+const PUBLIC_NO_CSRF_PATHS = new Set<string>(['/analytics/job-view'])
+
 function csrfOrTrusted(req: Request, res: Response, next: NextFunction) {
+  if (PUBLIC_NO_CSRF_PATHS.has(req.path)) {
+    return next()
+  }
   const internalSecret = process.env.INTERNAL_API_SECRET
   if (internalSecret && req.headers['x-internal-secret'] === internalSecret) {
     return next()
