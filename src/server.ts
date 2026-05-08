@@ -41,15 +41,11 @@ import {
   publicFormLimiter,
 } from './middleware/rateLimiter.js'
 
+// Sentry is initialized in src/instrument.ts which must be loaded via
+// `node --import ./dist/instrument.js` (see package.json start script).
+// dotenv is also loaded there, so this call is just a safety net for any
+// environment that runs server.js without --import (e.g. some IDEs).
 dotenv.config()
-if (process.env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    environment: process.env.NODE_ENV || 'development',
-    tracesSampleRate: 0.1,
-    integrations: [Sentry.expressIntegration()],
-  })
-}
 
 const app = express()
 app.set('trust proxy', 1)
