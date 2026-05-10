@@ -16,6 +16,11 @@ import {
   createNoticeSchema,
 } from '../lib/schemas.js'
 import { fireAndForget } from '../lib/notify.js'
+import {
+  fetchCommunicationLogsForProfile,
+  insertAdminManualRecipientLog,
+  type ProfileContactIds,
+} from '../lib/communicationLogQueries.js'
 
 const router = Router();
 
@@ -36,6 +41,8 @@ interface ProfileTargetRow {
   phone: string | null;
   role: string;
 }
+
+type CommTarget = ProfileTargetRow & { resolvedProfileId: string | null };
 
 function firstToken(displayName: string): string {
   const t = displayName.trim().split(/\s+/)[0];
@@ -95,6 +102,39 @@ router.get('/communications/logs', authenticate, requireAdmin, async (req, res) 
   }
 });
 
+// GET /api/admin/communications/logs/for-user/:userId — manual admin SMS/email history for one profile
+router.get(
+  '/communications/logs/for-user/:userId',
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const supabaseAdmin = getSupabaseAdminClient();
+      const userId = String(req.params.userId ?? '').trim();
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+      }
+      const { data: profile, error } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email, phone')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!profile) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      const logs = await fetchCommunicationLogsForProfile(
+        supabaseAdmin,
+        profile as ProfileContactIds
+      );
+      return res.json({ logs });
+    } catch (error) {
+      console.error('Communications logs for-user error:', error);
+      return res.status(500).json({ error: errorMessage(error) || 'Failed to fetch logs' });
+    }
+  }
+);
+
 function normalizeCommunicationRecipientsKey(raw: unknown): string {
   const k = String(raw ?? '')
     .toLowerCase()
@@ -140,7 +180,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
     const recipientsKey = normalizeCommunicationRecipientsKey(recipientsRaw);
 
     // Resolve recipients
-    let targets: ProfileTargetRow[] = [];
+    let targets: CommTarget[] = [];
 
     if (recipientsKey === 'single') {
       if (userId) {
@@ -149,14 +189,14 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           .select('id, email, full_name, farm_name, phone, role')
           .eq('id', userId)
           .maybeSingle();
-        if (data) targets = [data];
+        if (data) targets = [{ ...(data as ProfileTargetRow), resolvedProfileId: data.id }];
       } else if (email) {
         const { data } = await supabaseAdmin
           .from('profiles')
           .select('id, email, full_name, farm_name, phone, role')
           .eq('email', email)
           .maybeSingle();
-        if (data) targets = [data];
+        if (data) targets = [{ ...(data as ProfileTargetRow), resolvedProfileId: data.id }];
       } else {
         return res.status(400).json({ error: 'userId or email is required for single recipient' });
       }
@@ -179,7 +219,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           for (const row of rows || []) {
             if (seen.has(row.id)) continue;
             seen.add(row.id);
-            targets.push(row as ProfileTargetRow);
+            targets.push({ ...(row as ProfileTargetRow), resolvedProfileId: row.id });
           }
         }
         if (targets.length === 0) {
@@ -202,7 +242,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
             .eq('email', em)
             .maybeSingle();
           if (row) {
-            targets.push(row);
+            targets.push({ ...(row as ProfileTargetRow), resolvedProfileId: row.id });
           } else {
             targets.push({
               id: crypto.randomUUID(),
@@ -211,6 +251,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
               farm_name: null,
               phone: null,
               role: 'unknown',
+              resolvedProfileId: null,
             });
           }
         }
@@ -254,8 +295,9 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
         page += 1;
       }
       targets = profiles.map((p) => ({
-        ...p,
+        ...(p as ProfileTargetRow),
         email: p.email && p.email.trim() ? p.email.trim() : authEmailById[p.id] || null,
+        resolvedProfileId: p.id,
       }));
     }
 
@@ -286,6 +328,8 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
     let skippedCount = 0;
     const failures: { email?: string; phone?: string; error: string }[] = [];
 
+    const adminUserId = (req as AdminAuthRequest).user.id;
+
     if (type === 'email') {
       const { sendNotificationEmail } = await import('../services/email-service.js');
 
@@ -303,6 +347,17 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           greetingNameForEmail(t),
           { role: t.role }
         );
+        await insertAdminManualRecipientLog(supabaseAdmin, {
+          adminUserId,
+          channel: 'email',
+          relatedUserId: t.resolvedProfileId,
+          recipientEmail: t.email.trim(),
+          recipientPhone: null,
+          subject: subj ?? null,
+          message: body,
+          status: result?.success ? 'sent' : 'failed',
+          errorDetail: result?.success ? null : result?.error ?? 'Failed to send',
+        });
         if (result?.success) {
           successCount += 1;
         } else {
@@ -321,6 +376,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
       });
 
       fireAndForget(async () => {
+        const adminUserIdSms = (req as AdminAuthRequest).user.id
         const { sendRawSms } = await import('../services/sms-service.js')
         let bgSuccess = 0
         let bgFailure = 0
@@ -334,6 +390,17 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           }
           const smsBody = personalizeCommunicationMessage(message, t)
           const result = await sendRawSms(t.phone, smsBody, 'Admin Communications')
+          await insertAdminManualRecipientLog(supabaseAdmin, {
+            adminUserId: adminUserIdSms,
+            channel: 'sms',
+            relatedUserId: t.resolvedProfileId,
+            recipientEmail: null,
+            recipientPhone: t.phone.trim(),
+            subject: null,
+            message: smsBody,
+            status: result.success ? 'sent' : 'failed',
+            errorDetail: result.success ? null : result.error ?? 'failed',
+          })
           if (result.success) {
             bgSuccess += 1
           } else {

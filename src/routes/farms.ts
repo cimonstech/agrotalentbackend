@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth.js'
 import type { AuthRequest } from '../types/auth.js'
 import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { recordFarmConversion } from '../services/farmConversion.js'
+import { fetchCommunicationLogsForProfile } from '../lib/communicationLogQueries.js'
 
 const router = express.Router()
 
@@ -99,6 +100,63 @@ router.get('/preview/:token/applications', async (req, res) => {
     })
 
     return res.json({ applications: sanitized, total: sanitized.length })
+  } catch (err) {
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Unknown error',
+    })
+  }
+})
+
+// GET /api/farms/applicants/:applicantId/communication-log
+// Farm employers may view AgroTalent Hub admin manual SMS/email history for applicants who applied to their jobs.
+router.get('/applicants/:applicantId/communication-log', authenticate, async (req, res) => {
+  try {
+    const authReq = req as AuthRequest
+    const farmId = authReq.user?.id
+    if (!farmId) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    if (authReq.user.role !== 'farm') {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+    const applicantId = String(req.params.applicantId ?? '').trim()
+    if (!applicantId) {
+      return res.status(400).json({ error: 'applicantId is required' })
+    }
+
+    const supabaseAdmin = getSupabaseAdminClient()
+    const { data: apps, error: appsErr } = await supabaseAdmin
+      .from('applications')
+      .select('id, jobs ( farm_id )')
+      .eq('applicant_id', applicantId)
+
+    if (appsErr) throw appsErr
+
+    const hasAccess = (apps ?? []).some((row: { jobs?: { farm_id?: string } | { farm_id?: string }[] | null }) => {
+      const j = row.jobs
+      const job = Array.isArray(j) ? j[0] : j
+      return job?.farm_id === farmId
+    })
+
+    if (!hasAccess) {
+      return res.status(403).json({
+        error: 'You can only view communications for applicants who applied to your jobs.',
+      })
+    }
+
+    const { data: profile, error: profErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, phone')
+      .eq('id', applicantId)
+      .maybeSingle()
+
+    if (profErr) throw profErr
+    if (!profile) {
+      return res.status(404).json({ error: 'Applicant not found' })
+    }
+
+    const logs = await fetchCommunicationLogsForProfile(supabaseAdmin, profile)
+    return res.json({ logs })
   } catch (err) {
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Unknown error',
