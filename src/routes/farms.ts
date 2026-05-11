@@ -27,7 +27,11 @@ router.post('/convert-preview', authenticate, async (req, res) => {
       return res.status(400).json({ error: result.error })
     }
 
-    return res.json({ success: true, jobId: result.jobId })
+    return res.json({
+      success: true,
+      jobId: result.jobId,
+      jobsTransferred: result.jobsTransferred,
+    })
   } catch (err) {
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Unknown error',
