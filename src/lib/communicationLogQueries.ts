@@ -34,10 +34,60 @@ function normalizeDigits(input: string | null | undefined): string[] {
   variants.add(d)
   if (d.startsWith('233')) variants.add(d.slice(3))
   if (d.length === 10 && d.startsWith('0')) variants.add(d.slice(1))
-  return [...variants]
+  return Array.from(variants)
 }
 
-/** Rows tied to this profile (automation + admin messaging via related_user_id or matched recipient email/phone). */
+/** Maps transactional rows from `email_logs` (Resend / Fish Africa loggers) into the communication history shape. */
+function mapEmailLogRowToCommunicationRecord(row: {
+  id: string
+  recipient_email: string | null
+  recipient_name?: string | null
+  subject?: string | null
+  type?: string | null
+  status?: string | null
+  error_message?: string | null
+  metadata?: Record<string, unknown> | null
+  sent_at?: string | null
+  created_at?: string | null
+}): CommunicationLogRecord {
+  const syntheticId = `email_log:${row.id}`
+  const rawRecipient = String(row.recipient_email ?? '')
+  const isSmsPseudo = /^sms:/i.test(rawRecipient)
+  const phoneFromPseudo = isSmsPseudo ? rawRecipient.replace(/^sms:/i, '').trim() : null
+  const meta =
+    row.metadata && typeof row.metadata === 'object' ? row.metadata : null
+  const metaPhone = typeof meta?.phone === 'string' ? meta.phone.trim() : null
+  const typeStr = String(row.type ?? '').toLowerCase()
+  const channel = typeStr === 'sms' || isSmsPseudo ? 'sms' : 'email'
+
+  const parts: string[] = []
+  if (row.subject?.trim()) parts.push(row.subject.trim())
+  if (typeStr && !['email', 'sms'].includes(typeStr))
+    parts.push(`Type: ${typeStr.replace(/_/g, ' ')}`)
+  if (row.error_message?.trim()) parts.push(`Error: ${row.error_message.trim()}`)
+
+  return {
+    id: syntheticId,
+    type: channel,
+    channel,
+    event_type: typeStr ? typeStr.replace(/_/g, ' ') : 'transactional',
+    recipients: null,
+    recipient_email: isSmsPseudo ? null : rawRecipient || null,
+    recipient_phone: metaPhone || phoneFromPseudo,
+    subject: row.subject ?? null,
+    message: parts.join(' · ') || 'Transactional message',
+    status: row.status ?? null,
+    created_at: row.sent_at ?? row.created_at ?? null,
+    triggered_by: 'system',
+  }
+}
+
+function isMissingRelationError(err: { message?: string } | null): boolean {
+  const m = String(err?.message ?? '')
+  return m.includes('does not exist') || m.includes('schema cache')
+}
+
+/** Rows tied to this profile (communication_logs + matching email_logs delivery records). */
 export async function fetchCommunicationLogsForProfile(
   supabaseAdmin: AdminDb,
   profile: ProfileContactIds,
@@ -69,6 +119,18 @@ export async function fetchCommunicationLogsForProfile(
       .order('created_at', { ascending: false })
       .limit(limit)
     addRows((byEmail ?? []) as CommunicationLogRecord[])
+
+    const elRes = await supabaseAdmin
+      .from('email_logs')
+      .select('*')
+      .ilike('recipient_email', email)
+      .order('sent_at', { ascending: false })
+      .limit(limit)
+    if (!elRes.error && elRes.data) {
+      addRows(elRes.data.map(mapEmailLogRowToCommunicationRecord))
+    } else if (elRes.error && !isMissingRelationError(elRes.error)) {
+      console.warn('[fetchCommunicationLogsForProfile] email_logs:', elRes.error.message)
+    }
   }
 
   for (const digits of normalizeDigits(profile.phone)) {
@@ -79,6 +141,18 @@ export async function fetchCommunicationLogsForProfile(
       .order('created_at', { ascending: false })
       .limit(limit)
     addRows((byPhone ?? []) as CommunicationLogRecord[])
+
+    const smsElRes = await supabaseAdmin
+      .from('email_logs')
+      .select('*')
+      .ilike('recipient_email', `%sms:${digits}%`)
+      .order('sent_at', { ascending: false })
+      .limit(limit)
+    if (!smsElRes.error && smsElRes.data) {
+      addRows(smsElRes.data.map(mapEmailLogRowToCommunicationRecord))
+    } else if (smsElRes.error && !isMissingRelationError(smsElRes.error)) {
+      console.warn('[fetchCommunicationLogsForProfile] email_logs sms:', smsElRes.error.message)
+    }
   }
 
   const merged = [...collected.values()]

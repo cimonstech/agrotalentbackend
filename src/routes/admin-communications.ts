@@ -102,7 +102,7 @@ router.get('/communications/logs', authenticate, requireAdmin, async (req, res) 
   }
 });
 
-// GET /api/admin/communications/logs/for-user/:userId — manual admin SMS/email history for one profile
+// GET /api/admin/communications/logs/for-user/:userId — communication_logs + matching email_logs (transactional)
 router.get(
   '/communications/logs/for-user/:userId',
   authenticate,
