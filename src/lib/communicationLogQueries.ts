@@ -115,7 +115,7 @@ export async function fetchCommunicationLogsForProfile(
     const { data: byEmail } = await supabaseAdmin
       .from('communication_logs')
       .select('*')
-      .ilike('recipient_email', email)
+      .ilike('recipient_email', `%${email}%`)
       .order('created_at', { ascending: false })
       .limit(limit)
     addRows((byEmail ?? []) as CommunicationLogRecord[])
@@ -123,7 +123,7 @@ export async function fetchCommunicationLogsForProfile(
     const elRes = await supabaseAdmin
       .from('email_logs')
       .select('*')
-      .ilike('recipient_email', email)
+      .ilike('recipient_email', `%${email}%`)
       .order('sent_at', { ascending: false })
       .limit(limit)
     if (!elRes.error && elRes.data) {
