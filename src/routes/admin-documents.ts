@@ -36,6 +36,8 @@ router.get('/documents', authenticate, requireAdmin, async (req, res) => {
 
     if (documentType) {
       query = query.eq('document_type', documentType);
+    } else {
+      query = query.neq('document_type', 'job_image');
     }
 
     if (status) {

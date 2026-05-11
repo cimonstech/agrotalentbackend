@@ -73,6 +73,15 @@ router.post('/', authenticate, async (req, res, next) => {
       req.file.mimetype
     );
 
+    // Job listing photos are not identity documents — do not queue them for admin verification.
+    if (document_type === 'job_image') {
+      return res.status(201).json({
+        document: null,
+        url: publicUrl,
+        message: 'Job image uploaded successfully',
+      });
+    }
+
     // Insert document record using admin client to bypass RLS
     const { data: document, error: insertError } = await supabaseAdmin
       .from('documents')
@@ -91,7 +100,8 @@ router.post('/', authenticate, async (req, res, next) => {
 
     return res.status(201).json({
       document,
-      message: 'Document uploaded successfully'
+      url: publicUrl,
+      message: 'Document uploaded successfully',
     });
   } catch (error) {
     return res.status(500).json({
