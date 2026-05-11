@@ -19,10 +19,6 @@ function escapeEmailHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-function getFrontendBaseUrl(): string {
-  return String(process.env.FRONTEND_URL || '').replace(/\/+$/, '');
-}
-
 export interface NotificationEmailOptions {
   ctaText?: string;
   ctaUrl?: string;
@@ -68,15 +64,70 @@ function getNotificationFromEmail() {
   return process.env.NOTIFICATION_EMAIL || 'AgroTalent Hub <notifications@agrotalenthub.com>';
 }
 
-function getSiteUrl() {
-  const raw =
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.FRONTEND_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined) ||
-    'http://localhost:3000';
+function stripTrailingSlashes(u: string): string {
+  return String(u || '').replace(/\/+$/, '');
+}
 
-  // Normalize: strip trailing slashes
-  return String(raw).replace(/\/+$/, '');
+function isLikelyApiOrigin(url: string): boolean {
+  const s = stripTrailingSlashes(url);
+  if (!s) return false;
+  try {
+    const withProto = s.includes('://') ? s : `https://${s}`;
+    const host = new URL(withProto).hostname.toLowerCase();
+    return host.startsWith('api.');
+  } catch {
+    return /\bapi\./i.test(s);
+  }
+}
+
+function rewriteApiSubdomainToPublic(url: string): string | null {
+  const s = stripTrailingSlashes(url);
+  if (!s) return null;
+  try {
+    const withProto = s.includes('://') ? s : `https://${s}`;
+    const u = new URL(withProto);
+    const h = u.hostname.toLowerCase();
+    if (h.startsWith('api.')) {
+      u.hostname = h.slice(4);
+      return stripTrailingSlashes(u.origin);
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Public web origin for links inside emails (dashboard CTA, verify-email, footer).
+ * Prefer FRONTEND_URL, then NEXT_PUBLIC_SITE_URL; never use api.* — rewrite to apex if needed.
+ */
+function getSiteUrl(): string {
+  const envFront = stripTrailingSlashes(process.env.FRONTEND_URL || '');
+  const envNext = stripTrailingSlashes(process.env.NEXT_PUBLIC_SITE_URL || '');
+
+  const pickNonApi = (c: string): string | null => {
+    if (!c) return null;
+    return isLikelyApiOrigin(c) ? null : c;
+  };
+
+  const resolved =
+    pickNonApi(envFront) ||
+    pickNonApi(envNext) ||
+    rewriteApiSubdomainToPublic(envFront) ||
+    rewriteApiSubdomainToPublic(envNext);
+
+  if (resolved) return resolved;
+
+  if (process.env.VERCEL_URL) {
+    const v = stripTrailingSlashes(`https://${process.env.VERCEL_URL}`);
+    if (!isLikelyApiOrigin(v)) return v;
+  }
+
+  return 'http://localhost:3000';
+}
+
+function getFrontendBaseUrl(): string {
+  return getSiteUrl();
 }
 
 function getLogoUrl() {
