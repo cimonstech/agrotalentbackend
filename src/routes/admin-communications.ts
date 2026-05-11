@@ -345,7 +345,7 @@ router.post('/communications/send', authenticate, requireAdmin, async (req, res)
           subj,
           body,
           greetingNameForEmail(t),
-          { role: t.role }
+          { role: t.role, messageIsHtml: true }
         );
         await insertAdminManualRecipientLog(supabaseAdmin, {
           adminUserId,

@@ -27,6 +27,33 @@ export interface NotificationEmailOptions {
   ctaText?: string;
   ctaUrl?: string;
   role?: string;
+  /** When true, `message` is treated as HTML fragment (admin/composer); sanitized before embedding. Plain-text part is derived. */
+  messageIsHtml?: boolean;
+}
+
+function sanitizeAdminRichEmailHtml(html: string): string {
+  let s = html.trim();
+  if (!s) return '';
+  s = s.replace(/<\/(?:script|style)[^>]*>[\s\S]*?<\/(?:script|style)>/gi, '');
+  s = s.replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, '');
+  s = s.replace(/\son\w+\s*=\s*(['"])[\s\S]*?\1/gi, '');
+  s = s.replace(/\son\w+\s*=\s*[^\s>]+\s*/gi, '');
+  s = s.replace(/javascript:/gi, '');
+  return s;
+}
+
+function htmlToPlainTextEmailFallback(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function getResendApiKey() {
@@ -577,6 +604,12 @@ export async function sendNotificationEmail(
     return { success: false, error: 'Email service not configured' };
   }
 
+  const messageIsHtml = options.messageIsHtml === true;
+  const safeSubject = escapeEmailHtml(subject);
+  const innerHtml = messageIsHtml
+    ? sanitizeAdminRichEmailHtml(message)
+    : escapeEmailHtml(message).replace(/\r\n/g, '\n').replace(/\n/g, '<br />');
+
   const SITE_URL = getSiteUrl();
   const ctaText = options.ctaText || 'Open Dashboard';
   const ctaUrl = toAbsoluteUrl(
@@ -589,7 +622,7 @@ export async function sendNotificationEmail(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${subject}</title>
+  <title>${safeSubject}</title>
   <style>
     * {
       margin: 0;
@@ -632,7 +665,35 @@ export async function sendNotificationEmail(
       color: #555;
       margin-bottom: 30px;
       line-height: 1.8;
+    }
+    .content-plain {
       white-space: pre-line;
+    }
+    .content-html {
+      white-space: normal;
+    }
+    .content-html p {
+      margin: 0 0 1em 0;
+    }
+    .content-html p:last-child {
+      margin-bottom: 0;
+    }
+    .content-html ul,
+    .content-html ol {
+      margin: 0 0 1em 0;
+      padding-left: 1.25em;
+    }
+    .content-html li {
+      margin: 0.25em 0;
+    }
+    .content-html a {
+      color: #2d5016;
+    }
+    .content-html blockquote {
+      margin: 0 0 1em 0;
+      padding-left: 1em;
+      border-left: 4px solid #cde4c3;
+      color: #444;
     }
     .button-container {
       text-align: center;
@@ -678,20 +739,20 @@ export async function sendNotificationEmail(
     <div class="email-header">
       <img src="${getLogoUrl()}" alt="AgroTalent Hub" style="max-width: 120px; height: auto; margin-bottom: 15px;" />
       <h1 style="color: #ffffff; font-size: 28px; font-weight: 700; margin-bottom: 10px;">AgroTalent Hub</h1>
-      <p style="color: #e8f5e9; font-size: 16px;">${subject}</p>
+      <p style="color: #e8f5e9; font-size: 16px;">${safeSubject}</p>
     </div>
     
     <div class="email-body">
       <div class="greeting">
-        ${fullName ? `Hello ${fullName},` : 'Hello,'}
+        ${fullName ? `Hello ${escapeEmailHtml(fullName)},` : 'Hello,'}
       </div>
       
-      <div class="content">
-${message}
+      <div class="content ${messageIsHtml ? 'content-html' : 'content-plain'}">
+${innerHtml}
       </div>
       
       <div class="button-container">
-        <a href="${ctaUrl}" class="action-button">${ctaText}</a>
+        <a href="${ctaUrl}" class="action-button">${escapeEmailHtml(ctaText)}</a>
       </div>
     </div>
     
@@ -714,7 +775,7 @@ ${message}
   const emailText = `
 Hello${fullName ? ` ${fullName}` : ''},
 
-${message}
+${messageIsHtml ? htmlToPlainTextEmailFallback(innerHtml) : message}
 
 Best regards,
 AgroTalent Hub Team
