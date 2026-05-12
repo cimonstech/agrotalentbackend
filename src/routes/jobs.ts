@@ -209,6 +209,7 @@ router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
       job_type,
       location,
       address,
+      postal_code,
       salary_min,
       salary_max,
       required_qualification,
@@ -262,6 +263,7 @@ router.post('/', authenticate, validate(createJobSchema), async (req, res) => {
         job_type,
         location,
         address: address || null,
+        postal_code: postal_code ? String(postal_code).trim() || null : null,
         salary_min: salary_min ? parseFloat(salary_min) : null,
         salary_max: salary_max ? parseFloat(salary_max) : null,
         required_qualification: required_qualification || null,
@@ -324,6 +326,7 @@ router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) =
       job_type,
       location,
       address,
+      postal_code,
       salary_min,
       salary_max,
       required_qualification,
@@ -341,6 +344,12 @@ router.patch('/:id', authenticate, validate(updateJobSchema), async (req, res) =
     if (job_type !== undefined) updateData.job_type = job_type;
     if (location !== undefined) updateData.location = location;
     if (address !== undefined) updateData.address = address || null;
+    if (postal_code !== undefined) {
+      updateData.postal_code =
+        postal_code != null && String(postal_code).trim() !== ''
+          ? String(postal_code).trim()
+          : null;
+    }
     if (salary_min !== undefined) updateData.salary_min = salary_min ? parseFloat(salary_min) : null;
     if (salary_max !== undefined) updateData.salary_max = salary_max ? parseFloat(salary_max) : null;
     if (required_qualification !== undefined) updateData.required_qualification = required_qualification || null;

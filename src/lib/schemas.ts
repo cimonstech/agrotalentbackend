@@ -81,6 +81,7 @@ const createJobObjectSchema = z.object({
   ]),
   location: ghanaRegionEnum,
   address: z.string().max(200).optional(),
+  postal_code: z.string().max(40).optional(),
   salary_min: z.coerce.number().min(0).optional(),
   salary_max: z.coerce.number().min(0).optional(),
   salary_currency: z.string().default('GHS'),
