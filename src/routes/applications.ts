@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { getSupabaseClient, getSupabaseAdminClient } from '../lib/supabase.js';
 import { authenticate } from '../middleware/auth.js';
 import type { AuthRequest } from '../types/auth.js';
@@ -16,6 +17,14 @@ import { schedulePlacementConfirmedEmail } from './placements.js';
 import { fireAndForget } from '../lib/notify.js'
 
 const router = express.Router();
+
+const applyLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many applications submitted. Please try again later.' },
+});
 
 function relationOne<T>(rel: T | T[] | null | undefined): T | undefined {
   if (rel == null) return undefined;
@@ -311,7 +320,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // POST /api/applications - Create application
-router.post('/', authenticate, validate(createApplicationSchema), async (req, res) => {
+router.post('/', applyLimiter, authenticate, validate(createApplicationSchema), async (req, res) => {
   try {
     const supabase = (req as AuthRequest).supabase;
     const supabaseAdmin = getSupabaseAdminClient();

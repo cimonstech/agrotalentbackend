@@ -119,7 +119,7 @@ export const updateJobSchema = jobSalaryRangeRefine(
 
 export const createApplicationSchema = z.object({
   job_id: z.string().uuid('Invalid job ID'),
-  cover_letter: z.string().max(2000).nullable().optional(),
+  cover_letter: z.string().max(10000).nullable().optional(),
 })
 
 export const updateApplicationStatusSchema = z.object({
