@@ -108,6 +108,7 @@ export async function recordFarmConversion(
       .update({
         farm_id: farmId,
         is_sourced_job: false,
+        is_platform_job: false,
         status: 'active',
       })
       .in('id', allSourcedJobIds)
