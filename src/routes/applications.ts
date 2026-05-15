@@ -10,7 +10,10 @@ import {
   createApplicationSchema,
   updateApplicationStatusSchema,
 } from '../lib/schemas.js'
-import { calculateMatchScore } from '../services/matching-service.js';
+import {
+  calculateMatchScore,
+  calculateMatchScoreWithBreakdown,
+} from '../services/matching-service.js';
 import { sendApplicationReceivedEmail, sendApplicationStatusEmail } from '../services/email-service.js';
 import { sendApplicationReceivedSms, sendApplicationStatusSms } from '../services/sms-service.js';
 import { schedulePlacementConfirmedEmail } from './placements.js';
@@ -503,6 +506,138 @@ router.post('/', applyLimiter, authenticate, validate(createApplicationSchema), 
     return res.status(201).json({ application });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) });
+  }
+});
+
+// POST /api/applications/recalculate-scores - Recompute match_score (internal)
+router.post('/recalculate-scores', async (req, res) => {
+  const secret = process.env.INTERNAL_API_SECRET;
+  if (!secret || req.headers['x-internal-secret'] !== secret) {
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+
+  try {
+    const supabase = getSupabaseAdminClient();
+
+    const { data: applications, error: fetchErr } = await supabase
+      .from('applications')
+      .select(`
+        id,
+        jobs!applications_job_id_fkey (
+          location,
+          required_qualification,
+          required_experience_years,
+          required_specialization,
+          required_institution_type
+        ),
+        profiles!applications_applicant_id_fkey (
+          preferred_region,
+          qualification,
+          years_of_experience,
+          specialization,
+          institution_type
+        )
+      `);
+
+    if (fetchErr) throw fetchErr;
+    if (!applications) {
+      return res.json({ success: true, updated: 0 });
+    }
+
+    let updated = 0;
+    for (const app of applications) {
+      const jobData = relationOne(
+        app.jobs as Record<string, unknown> | Record<string, unknown>[] | null
+      );
+      const profileData = relationOne(
+        app.profiles as Record<string, unknown> | Record<string, unknown>[] | null
+      );
+
+      if (!jobData || !profileData) continue;
+
+      const score = calculateMatchScore(jobData, profileData);
+
+      await supabase
+        .from('applications')
+        .update({ match_score: score })
+        .eq('id', app.id as string);
+
+      updated++;
+    }
+
+    return res.json({ success: true, updated });
+  } catch (err) {
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Unknown error',
+    });
+  }
+});
+
+// GET /api/applications/:id/match-breakdown - Match score factor breakdown
+router.get('/:id/match-breakdown', authenticate, async (req, res) => {
+  try {
+    const supabase = getSupabaseAdminClient();
+    const { id } = req.params;
+    const userId = (req as AuthRequest).user.id;
+    const userRole = (req as AuthRequest).user.role;
+
+    const { data: app, error: appErr } = await supabase
+      .from('applications')
+      .select(`
+        id,
+        applicant_id,
+        job_id,
+        jobs!applications_job_id_fkey (
+          location,
+          required_qualification,
+          required_experience_years,
+          required_specialization,
+          required_institution_type
+        ),
+        profiles!applications_applicant_id_fkey (
+          preferred_region,
+          qualification,
+          years_of_experience,
+          specialization,
+          institution_type
+        )
+      `)
+      .eq('id', id)
+      .single();
+
+    if (appErr || !app) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (userRole !== 'admin' && app.applicant_id !== userId) {
+      const { data: job } = await supabase
+        .from('jobs')
+        .select('farm_id')
+        .eq('id', app.job_id as string)
+        .single();
+      if (!job || job.farm_id !== userId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+
+    const jobData = relationOne(
+      app.jobs as Record<string, unknown> | Record<string, unknown>[] | null
+    );
+    const profileData = relationOne(
+      app.profiles as Record<string, unknown> | Record<string, unknown>[] | null
+    );
+
+    if (!jobData || !profileData) {
+      return res.status(404).json({ error: 'Job or profile data missing' });
+    }
+
+    const breakdown = calculateMatchScoreWithBreakdown(jobData, profileData);
+
+    return res.json(breakdown);
+  } catch (err) {
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Unknown error',
+    });
   }
 });
 

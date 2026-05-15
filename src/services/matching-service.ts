@@ -83,6 +83,225 @@ export function calculateMatchScore(
   return Math.min(100, score);
 }
 
+export interface MatchBreakdown {
+  total: number;
+  factors: MatchFactor[];
+}
+
+export interface MatchFactor {
+  name: string;
+  status: 'match' | 'partial' | 'missing';
+  points: number;
+  maxPoints: number;
+  detail: string;
+}
+
+export function calculateMatchScoreWithBreakdown(
+  job: Record<string, unknown>,
+  profile: Record<string, unknown>
+): MatchBreakdown {
+  const factors: MatchFactor[] = [];
+
+  const ADJACENCY: Record<string, string[]> = {
+    'Greater Accra': ['Eastern', 'Central', 'Volta'],
+    'Ashanti': ['Eastern', 'Western', 'Bono', 'Ahafo', 'Bono East'],
+    'Eastern': ['Greater Accra', 'Ashanti', 'Volta', 'Oti'],
+    'Western': ['Central', 'Ashanti', 'Western North'],
+    'Western North': ['Western', 'Ashanti', 'Ahafo'],
+    'Central': ['Greater Accra', 'Western', 'Ashanti'],
+    'Volta': ['Greater Accra', 'Eastern', 'Oti'],
+    'Oti': ['Volta', 'Eastern', 'Northern'],
+    'Northern': ['North East', 'Savannah', 'Bono East'],
+    'Upper East': ['North East', 'Upper West'],
+    'Upper West': ['Upper East', 'Savannah'],
+    'North East': ['Northern', 'Upper East'],
+    'Savannah': ['Northern', 'Upper West'],
+    'Bono': ['Ashanti', 'Bono East', 'Ahafo'],
+    'Bono East': ['Bono', 'Ashanti', 'Northern'],
+    'Ahafo': ['Ashanti', 'Bono', 'Western North'],
+  };
+
+  const jobLocation = (job.location as string | null | undefined)?.trim() ?? '';
+  const profileRegion = (profile.preferred_region as string | null | undefined)?.trim() ?? '';
+
+  if (!profileRegion) {
+    factors.push({
+      name: 'Location',
+      status: 'missing',
+      points: 0,
+      maxPoints: 50,
+      detail: 'Candidate has no preferred region set',
+    });
+  } else if (jobLocation.toLowerCase() === profileRegion.toLowerCase()) {
+    factors.push({
+      name: 'Location',
+      status: 'match',
+      points: 50,
+      maxPoints: 50,
+      detail: `Candidate is in ${profileRegion} - same as job`,
+    });
+  } else {
+    const adjacent = ADJACENCY[jobLocation] ?? [];
+    const isAdjacent = adjacent.some(
+      (r) => r.toLowerCase() === profileRegion.toLowerCase()
+    );
+    if (isAdjacent) {
+      factors.push({
+        name: 'Location',
+        status: 'partial',
+        points: 30,
+        maxPoints: 50,
+        detail: `Candidate is in ${profileRegion} - adjacent to ${jobLocation}`,
+      });
+    } else {
+      factors.push({
+        name: 'Location',
+        status: 'missing',
+        points: 10,
+        maxPoints: 50,
+        detail: `Candidate is in ${profileRegion} - job is in ${jobLocation}`,
+      });
+    }
+  }
+
+  const reqQual = (job.required_qualification as string | null | undefined) ?? '';
+  const profileQual = (profile.qualification as string | null | undefined) ?? '';
+
+  if (!reqQual) {
+    factors.push({
+      name: 'Qualification',
+      status: 'match',
+      points: 20,
+      maxPoints: 20,
+      detail: 'No specific qualification required',
+    });
+  } else if (reqQual.toLowerCase() === profileQual.toLowerCase()) {
+    factors.push({
+      name: 'Qualification',
+      status: 'match',
+      points: 20,
+      maxPoints: 20,
+      detail: `Candidate has ${profileQual}`,
+    });
+  } else {
+    factors.push({
+      name: 'Qualification',
+      status: 'missing',
+      points: 0,
+      maxPoints: 20,
+      detail: profileQual
+        ? `Job requires ${reqQual}, candidate has ${profileQual}`
+        : `Job requires ${reqQual}, candidate qualification not set`,
+    });
+  }
+
+  const reqExp = (job.required_experience_years as number | null | undefined) ?? 0;
+  const profileExp = (profile.years_of_experience as number | null | undefined) ?? 0;
+
+  if (reqExp === 0) {
+    factors.push({
+      name: 'Experience',
+      status: 'match',
+      points: 15,
+      maxPoints: 15,
+      detail: 'No experience requirement for this role',
+    });
+  } else if (profileExp >= reqExp) {
+    factors.push({
+      name: 'Experience',
+      status: 'match',
+      points: 15,
+      maxPoints: 15,
+      detail: `Candidate has ${profileExp} year${profileExp !== 1 ? 's' : ''} - meets ${reqExp}+ required`,
+    });
+  } else if (reqExp - profileExp <= 1) {
+    factors.push({
+      name: 'Experience',
+      status: 'partial',
+      points: 8,
+      maxPoints: 15,
+      detail: `Candidate has ${profileExp} year${profileExp !== 1 ? 's' : ''} - ${reqExp - profileExp} year short`,
+    });
+  } else {
+    factors.push({
+      name: 'Experience',
+      status: 'missing',
+      points: 0,
+      maxPoints: 15,
+      detail: `Candidate has ${profileExp} year${profileExp !== 1 ? 's' : ''} - needs ${reqExp}+ years`,
+    });
+  }
+
+  const reqSpec = (job.required_specialization as string | null | undefined) ?? '';
+  const profileSpec = (profile.specialization as string | null | undefined) ?? '';
+
+  if (!reqSpec) {
+    factors.push({
+      name: 'Specialization',
+      status: 'match',
+      points: 10,
+      maxPoints: 10,
+      detail: 'No specialization requirement for this role',
+    });
+  } else if (reqSpec.toLowerCase() === profileSpec.toLowerCase()) {
+    factors.push({
+      name: 'Specialization',
+      status: 'match',
+      points: 10,
+      maxPoints: 10,
+      detail: `Candidate specializes in ${profileSpec}`,
+    });
+  } else {
+    factors.push({
+      name: 'Specialization',
+      status: 'missing',
+      points: 0,
+      maxPoints: 10,
+      detail: profileSpec
+        ? `Job needs ${reqSpec}, candidate has ${profileSpec}`
+        : `Job needs ${reqSpec}, candidate specialization not set`,
+    });
+  }
+
+  const reqInst = (job.required_institution_type as string | null | undefined) ?? '';
+  const profileInst = (profile.institution_type as string | null | undefined) ?? '';
+
+  if (!reqInst || reqInst === 'any') {
+    factors.push({
+      name: 'Institution Type',
+      status: 'match',
+      points: 5,
+      maxPoints: 5,
+      detail: 'No institution type requirement',
+    });
+  } else if (reqInst.toLowerCase() === profileInst.toLowerCase()) {
+    factors.push({
+      name: 'Institution Type',
+      status: 'match',
+      points: 5,
+      maxPoints: 5,
+      detail: `Candidate attended ${profileInst}`,
+    });
+  } else {
+    factors.push({
+      name: 'Institution Type',
+      status: 'missing',
+      points: 0,
+      maxPoints: 5,
+      detail: profileInst
+        ? `Job prefers ${reqInst}, candidate attended ${profileInst}`
+        : 'Institution type not set on candidate profile',
+    });
+  }
+
+  const total = Math.min(
+    100,
+    factors.reduce((sum, f) => sum + f.points, 0)
+  );
+
+  return { total, factors };
+}
+
 export interface MatchCriteria {
   location?: string;
   qualification?: string;
