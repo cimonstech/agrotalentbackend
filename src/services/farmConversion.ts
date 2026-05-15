@@ -2,6 +2,15 @@ import { getSupabaseAdminClient } from '../lib/supabase.js'
 import { sendNotificationEmail } from './email-service.js'
 import { fireAndForget } from '../lib/notify.js'
 
+function normalizePhone(phone: string | null | undefined): string {
+  if (!phone) return ''
+  const digits = phone.replace(/\D/g, '')
+  if (digits.startsWith('233') && digits.length > 9) {
+    return '0' + digits.slice(3)
+  }
+  return digits
+}
+
 export async function recordFarmConversion(
   token: string,
   farmId: string
@@ -40,52 +49,48 @@ export async function recordFarmConversion(
 
   const primaryJobId = (tokenRow.job_id as string | null) ?? null
 
-  // 2. Get the source identifiers from the primary job
-  let sourcePhone: string | null = null
-  let sourceContact: string | null = null
-
+  // 2. Source identifiers from primary job (context); match via farm profile below
   if (primaryJobId) {
-    const { data: primaryJob } = await supabase
+    await supabase
       .from('jobs')
       .select('source_phone, source_contact')
       .eq('id', primaryJobId)
       .single()
-
-    sourcePhone = primaryJob?.source_phone ?? null
-    sourceContact = primaryJob?.source_contact ?? null
   }
 
-  // 3. Find ALL sourced jobs belonging to this source employer
-  // Match by source_phone OR source_contact (whichever is available)
+  // 3. Find ALL sourced jobs for this employer (normalized phone or email)
   let allSourcedJobIds: string[] = []
 
   if (primaryJobId) {
-    let query = supabase
+    const { data: farmProfile } = await supabase
+      .from('profiles')
+      .select('phone, email')
+      .eq('id', farmId)
+      .single()
+
+    const farmPhone = normalizePhone(farmProfile?.phone)
+    const farmEmail = (farmProfile?.email ?? '').toLowerCase().trim()
+
+    const { data: allSourcedJobs } = await supabase
       .from('jobs')
-      .select('id')
+      .select('id, source_phone, source_contact')
       .eq('is_sourced_job', true)
       .is('deleted_at', null)
 
-    if (sourcePhone && sourceContact) {
-      query = query.or(
-        `source_phone.eq.${sourcePhone},source_contact.eq.${sourceContact}`
-      )
-    } else if (sourcePhone) {
-      query = query.eq('source_phone', sourcePhone)
-    } else if (sourceContact) {
-      query = query.eq('source_contact', sourceContact)
-    } else {
-      // No source identifiers — fall back to just the primary job
-      allSourcedJobIds = [primaryJobId]
-    }
+    allSourcedJobIds = (allSourcedJobs ?? [])
+      .filter((j) => {
+        const jobPhone = normalizePhone(j.source_phone as string | null)
+        const jobEmail = ((j.source_contact as string | null) ?? '')
+          .toLowerCase()
+          .trim()
+        const phoneMatch = Boolean(farmPhone && jobPhone && jobPhone === farmPhone)
+        const emailMatch = Boolean(farmEmail && jobEmail && jobEmail === farmEmail)
+        return phoneMatch || emailMatch
+      })
+      .map((j) => j.id as string)
 
-    if (allSourcedJobIds.length === 0) {
-      const { data: matchedJobs } = await query
-      allSourcedJobIds = (matchedJobs ?? []).map((j) => j.id as string)
-      // Always include the primary job even if query missed it
-      if (primaryJobId && !allSourcedJobIds.includes(primaryJobId)) {
-        allSourcedJobIds.push(primaryJobId)
-      }
+    if (primaryJobId && !allSourcedJobIds.includes(primaryJobId)) {
+      allSourcedJobIds.push(primaryJobId)
     }
   }
 
